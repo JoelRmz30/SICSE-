@@ -1,0 +1,612 @@
+{# ==========================================================================
+   Formulario de captura / edición de embarque.
+   Secciones: Plan, Carga, Unidad y transporte, Detalle por grupo (pipa/caja/tambor), Tiempos.
+   Comportamiento dinámico por tipo_unidad:
+     - pipa      : muestra lavadero, sellos lavado, sello válvula, sellos escotilla
+     - caja      : muestra sellos puertas traseras, temperatura
+     - tambor    : muestra check list y lote de tambor
+   Lotes: repetidor de filas con total en vivo.
+   Validaciones en navegador + en servidor (duplex).
+   ========================================================================== #}
+{% extends "base.html" %}
+{% block title %}{% if modo == 'nuevo' %}Nuevo embarque{% else %}Editar embarque{% endif %}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-xl-10 col-lg-11">
+        <form id="form-embarque" method="POST" novalidate>
+
+            {# Encabezado #}
+            <div class="card shadow mb-4">
+                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="bi bi-{% if modo == 'nuevo' %}plus-circle{% else %}pencil-square{% endif %} me-2"></i>
+                        {% if modo == 'nuevo' %}Nuevo embarque{% else %}Editar embarque{% endif %}
+                    </h5>
+                    {% if embarque %}
+                    <span class="badge bg-light text-dark ms-2">
+                        {{ embarque.num_cita }}
+                    </span>
+                    {% endif %}
+                </div>
+                <div class="card-body">
+
+                    {# Campos calculados de solo lectura (sección pequeña) #}
+                    <div class="row g-3 mb-4 p-3 bg-light rounded-2">
+                        <div class="col-md-4">
+                            <label class="form-label small text-muted mb-1">Semana (ISO)</label>
+                            <div id="calc-semana" class="form-control-plaintext fw-semibold">-</div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small text-muted mb-1">Mes</label>
+                            <div id="calc-mes" class="form-control-plaintext fw-semibold">-</div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small text-muted mb-1">Tiempo en planta</label>
+                            <div id="calc-tplanta" class="form-control-plaintext fw-semibold">-</div>
+                        </div>
+                    </div>
+
+                    {# ================= SECCIÓN 1: PLAN #}
+                    <fieldset class="mb-4">
+                        <legend class="fs-6 fw-semibold text-dark border-bottom pb-1 mb-3">
+                            <i class="bi bi-calendar-event me-1"></i>Plan
+                        </legend>
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                            <label class="form-label" for="fecha_embarque">Fecha de embarque</label>
+                            <input type="date" id="fecha_embarque" name="fecha_embarque" class="form-control" required
+                                value="{% if embarque and embarque.fecha_embarque %}{{ embarque.fecha_embarque.strftime('%Y-%m-%d') }}{% endif %}">
+                            <div class="invalid-feedback">Selecciona una fecha válida (no futura).</div>
+                        </div>
+                        </div>
+                        <div class="row g-3 mt-1">
+                            <div class="col-md-4">
+                                <label class="form-label" for="num_cita">Número de cita</label>
+                                <input type="text" id="num_cita" name="num_cita" class="form-control" required
+                                    pattern="{{ REGEX_NUM_CITA }}"
+                                    title="Formato: 2101-CITA-000000"
+                                    placeholder="2101-CITA-000000"
+                                    value="{% if embarque %}{{ embarque.num_cita }}{% endif %}">
+                                <div class="invalid-feedback">Usa el formato 2101-CITA-000000</div>
+                                <div class="form-text">Único; será llave con Dynamics.</div>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label" for="num_orden">Número de orden</label>
+                                <input type="text" id="num_orden" name="num_orden" class="form-control" required
+                                    pattern="{{ REGEX_NUM_ORDEN }}"
+                                    title="Formatos: 2101-OT000000, 2101-OV000000 o 1101-OV000000"
+                                    placeholder="2101-OT000000"
+                                    value="{% if embarque %}{{ embarque.num_orden }}{% endif %}">
+                                <div class="invalid-feedback">Usa 2101-OT, 2101-OV o 1101-OV + 6 dígitos.</div>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label" for="turno">Turno</label>
+                                <select id="turno" name="turno" class="form-select" required>
+                                    <option value="">...</option>
+                                    {% for t in [1,2,3] %}
+                                    <option value="{{ t }}" {% if embarque and embarque.turno == t %}selected{% endif %}>{{ t }}</option>
+                                    {% endfor %}
+                                </select>
+                                <div class="invalid-feedback">Turno 1, 2 o 3.</div>
+                            </div>
+                        </div>
+                        <div class="row g-3 mt-1">
+                            <div class="col-md-4">
+                                <label class="form-label" for="ticket">Ticket (opcional)</label>
+                                <input type="text" id="ticket" name="ticket" class="form-control"
+                                    pattern="{{ REGEX_TICKET }}"
+                                    title="Formato: ALA0000000 (7 dígitos)"
+                                    placeholder="ALA0000000"
+                                    value="{% if embarque and embarque.ticket %}{{ embarque.ticket }}{% endif %}">
+                                <div class="invalid-feedback">Si lo capturas, usa ALA + 7 dígitos.</div>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label" for="packing">Packing (opcional)</label>
+                                <input type="text" id="packing" name="packing" class="form-control"
+                                    pattern="{{ REGEX_PACKING }}"
+                                    title="Formato: 2101-000000"
+                                    placeholder="2101-000000"
+                                    value="{% if embarque and embarque.packing %}{{ embarque.packing }}{% endif %}">
+                                <div class="invalid-feedback">Si lo capturas, usa 2101- + 6 dígitos.</div>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    {# ================= SECCIÓN 2: CARGA #}
+                    <fieldset class="mb-4">
+                        <legend class="fs-6 fw-semibold text-dark border-bottom pb-1 mb-3">
+                            <i class="bi bi-box-seam me-1"></i>Carga
+                        </legend>
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label" for="id_producto">Producto</label>
+                                <select class="form-select" id="id_producto" name="id_producto" required>
+                                    <option value="">Selecciona...</option>
+                                    {% for p in catalogos.productos %}
+                                    <option value="{{ p.id_producto }}"
+                                        {% if embarque and embarque.id_producto == p.id_producto %}selected{% endif %}>
+                                        {{ p.descripcion }} {% if p.item %}<span class="text-muted small">({{ p.item }})</span>{% endif %}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                                <div class="invalid-feedback">Elige un producto del catálogo.</div>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label" for="id_cliente">Cliente / destino</label>
+                                <select class="form-select" id="id_cliente" name="id_cliente" required>
+                                    <option value="">Selecciona...</option>
+                                    {% for c in catalogos.clientes %}
+                                    <option value="{{ c.id_cliente }}"
+                                        {% if embarque and embarque.id_cliente == c.id_cliente %}selected{% endif %}>
+                                        {% if c.codigo %}[{{ c.codigo }}] - {% endif %}{{ c.nombre_cliente }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                                <div class="invalid-feedback">Elige un cliente del catálogo.</div>
+                            </div>
+                        </div>
+                        <div class="row g-3 mt-1">
+                            <div class="col-md-4">
+                                <label class="form-label" for="tipo_unidad">Tipo de unidad</label>
+                                <select class="form-select" id="tipo_unidad" name="tipo_unidad" required onchange="actualizarGrupoDetalle(this.value)">
+                                    <option value="">Selecciona...</option>
+                                    {% for val, lbl in grupo_opciones.items() %}
+                                    <option value="{{ val }}" data-grupo="{{ TIPO_UNIDAD_GRUPO[val] }}"
+                                        {% if embarque and embarque.tipo_unidad == val %}selected{% endif %}>
+                                        {{ lbl }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                                <div class="invalid-feedback">Elige un tipo de unidad.</div>
+                            </div>
+                        </div>
+
+                        {# Repetidor de lotes #}
+                        <div class="mt-4">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <label class="form-label mb-0 fw-semibold"><i class="bi bi-layers me-1"></i>Lotes (cantidad embarcada)</label>
+                                <button type="button" class="btn btn-sm btn-outline-success" onclick="agregarFilaLote()">
+                                    <i class="bi bi-plus-lg me-1"></i>Agregar lote
+                                </button>
+                            </div>
+                            <div class="table-responsive border rounded p-2 bg-white">
+                                <table class="table table-sm align-middle mb-0">
+                                    <thead class="table-light small text-muted">
+                                        <tr>
+                                            <th style="width:45%">Lote</th>
+                                            <th style="width:25%">Cantidad</th>
+                                            <th style="width:20%">Galones disp.</th>
+                                            <th style="width:10%"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="tbody-lotes">
+                                        {# Filas se agregan con JS, y en modo edición se rellenan desde servidor #}
+                                    </tbody>
+                                    <tfoot>
+                                        <tr class="fw-semibold">
+                                            <td class="text-end pe-3">Total:</td>
+                                            <td id="total-lotes">0.00</td>
+                                            <td colspan="2"></td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+                            <div id="alert-lotes" class="form-text text-danger d-none">
+                                Agrega al menos un lote con cantidad mayor a 0.
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    {# ================= SECCIÓN 3: UNIDAD Y TRANSPORTE #}
+                    <fieldset class="mb-4">
+                        <legend class="fs-6 fw-semibold text-dark border-bottom pb-1 mb-3">
+                            <i class="bi bi-truck me-1"></i>Unidad y transporte
+                        </legend>
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label" for="id_transportista">Transportista</label>
+                                <select class="form-select" id="id_transportista" name="id_transportista">
+                                    <option value="">Ninguno</option>
+                                    {% for t in catalogos.transportistas %}
+                                    <option value="{{ t.id_transportista }}"
+                                        {% if embarque and embarque.id_transportista == t.id_transportista %}selected{% endif %}>
+                                        {{ t.nombre }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label" for="id_operador">Operador</label>
+                                <select class="form-select" id="id_operador" name="id_operador">
+                                    <option value="">Ninguno</option>
+                                    {% for o in catalogos.operadores %}
+                                    <option value="{{ o.id_operador }}"
+                                        {% if embarque and embarque.id_operador == o.id_operador %}selected{% endif %}>
+                                        {{ o.nombre }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label" for="id_tractor">Tractor</label>
+                                <select class="form-select" id="id_tractor" name="id_tractor">
+                                    <option value="">Ninguno</option>
+                                    {% for u in catalogos.tractores %}
+                                    <option value="{{ u.id_unidad }}"
+                                        {% if embarque and embarque.id_tractor == u.id_unidad %}selected{% endif %}>
+                                        {{ u.placa }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label" for="id_remolque">Remolque</label>
+                                <select class="form-select" id="id_remolque" name="id_remolque">
+                                    <option value="">Ninguno</option>
+                                    {% for u in catalogos.remolques %}
+                                    <option value="{{ u.id_unidad }}"
+                                        {% if embarque and embarque.id_remolque == u.id_unidad %}selected{% endif %}>
+                                        {{ u.placa }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label" for="id_facilitador">Facilitador</label>
+                                <select class="form-select" id="id_facilitador" name="id_facilitador">
+                                    <option value="">Ninguno</option>
+                                    {% for f in catalogos.facilitadores %}
+                                    <option value="{{ f.id_facilitador }}"
+                                        {% if embarque and embarque.id_facilitador == f.id_facilitador %}selected{% endif %}>
+                                        {{ f.nombre }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    {# ================= SECCIÓN 4: DETALLE SEGÚN UNIDAD #}
+                    <fieldset class="mb-4">
+                        <legend class="fs-6 fw-semibold text-dark border-bottom pb-1 mb-3">
+                            <i class="bi bi-list-check me-1"></i>Detalle según unidad
+                        </legend>
+
+                        {# Grupo PIPA #}
+                        <div id="grupo-pipa" class="grupo-detalle d-none">
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label" for="id_lavadero">Lavadero</label>
+                                    <select class="form-select" id="id_lavadero" name="id_lavadero">
+                                        <option value="">Ninguno</option>
+                                        {% for lv in catalogos.lavaderos %}
+                                        <option value="{{ lv.id_lavadero }}"
+                                            {% if embarque and embarque.detalle and embarque.detalle.id_lavadero == lv.id_lavadero %}selected{% endif %}>
+                                            {{ lv.nombre }}
+                                        </option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="row g-3 mt-2">
+                                <div class="col-md-12">
+                                    <label class="form-label">Sellos de lavado (separados por coma o salto de línea)</label>
+                                    <textarea class="form-control" name="sellos_lavado" id="sellos_lavado" rows="2"
+                                        placeholder="Ej: 12345, 12346">{% if embarque %}{% for s in embarque.sellos %}{% if s.tipo == 'lavado' %}{{ s.numero }}{% if not loop.last %}, {% endif %}{% endif %}{% endfor %}{% endif %}</textarea>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label" for="sello_valvula">Sello de válvula</label>
+                                    <input type="text" class="form-control" name="sello_valvula" id="sello_valvula"
+                                        value="{% if embarque %}{% for s in embarque.sellos %}{% if s.tipo == 'valvula' %}{{ s.numero }}{% endif %}{% endfor %}{% endif %}">
+                                </div>
+                                <div class="col-md-12">
+                                    <label class="form-label">Sellos de escotilla (separados por coma o salto)</label>
+                                    <textarea class="form-control" name="sellos_escotilla" id="sellos_escotilla" rows="2"
+                                        placeholder="Ej: 778899, 778900">{% if embarque %}{% for s in embarque.sellos %}{% if s.tipo == 'escotilla' %}{{ s.numero }}{% if not loop.last %}, {% endif %}{% endif %}{% endfor %}{% endif %}</textarea>
+                                </div>
+                            </div>
+                        </div>
+
+                        {# Grupo CAJA #}
+                        <div id="grupo-caja" class="grupo-detalle d-none">
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label" for="temperatura_c">Temperatura de carga (°C)</label>
+                                    <input type="number" step="0.1" class="form-control" name="temperatura_c" id="temperatura_c"
+                                        placeholder="Ej: -18.0"
+                                        value="{% if embarque and embarque.temperatura_c is not none %}{{ embarque.temperatura_c }}{% endif %}">
+                                </div>
+                                <div class="col-md-12">
+                                    <label class="form-label">Sellos de puertas traseras (separados por coma)</label>
+                                    <textarea class="form-control" name="sellos_puerta_trasera" id="sellos_puerta_trasera" rows="2"
+                                        placeholder="Ej: 55001, 55002">{% if embarque %}{% for s in embarque.sellos %}{% if s.tipo == 'puerta_trasera' %}{{ s.numero }}{% if not loop.last %}, {% endif %}{% endif %}{% endfor %}{% endif %}</textarea>
+                                </div>
+                            </div>
+                        </div>
+
+                        {# Grupo TAMBOR #}
+                        <div id="grupo-tambor" class="grupo-detalle d-none">
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label" for="lote_tambor">Número de lote de tambor</label>
+                                    <input type="text" class="form-control" id="lote_tambor" name="lote_tambor"
+                                        value="{% if embarque and embarque.detalle and embarque.detalle.lote_tambor %}{{ embarque.detalle.lote_tambor }}{% endif %}">
+                                </div>
+                                <div class="col-md-6 d-flex align-items-end">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="check_list" name="check_list"
+                                            {% if embarque and embarque.detalle and embarque.detalle.check_list %}checked{% endif %}>
+                                        <label class="form-check-label" for="check_list">Check list aprobado</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="sin-grupo" class="alert alert-info small">
+                            <i class="bi bi-info-circle"></i> Selecciona un tipo de unidad para mostrar campos adicionales.
+                        </div>
+                    </fieldset>
+
+                    {# ================= SECCIÓN 5: TIEMPOS #}
+                    <fieldset class="mb-4">
+                        <legend class="fs-6 fw-semibold text-dark border-bottom pb-1 mb-3">
+                            <i class="bi bi-clock-history me-1"></i>Tiempos
+                        </legend>
+                        <div class="row g-3">
+                            {% set tiempos_nombres = [
+                                ('t_llegada', 'llegada', 'Llegada'),
+                                ('t_entrada', 'entrada', 'Entrada'),
+                                ('t_pesado_inicial', 'pesado_inicial', 'Pesado inicial'),
+                                ('t_pesaje_salida', 'pesaje_salida', 'Pesaje salida'),
+                                ('t_documentacion', 'documentacion', 'Documentación'),
+                                ('t_salida', 'salida', 'Salida'),
+                            ] %}
+                            {% for fname, attrname, flabel in tiempos_nombres %}
+                            <div class="col-md-4">
+                                <label class="form-label" for="{{ fname }}">{{ flabel }}</label>
+                                <input type="datetime-local" id="{{ fname }}" name="{{ fname }}" class="form-control"
+                                    onchange="calcularTiemposCalc()"
+                                    {% if embarque and embarque.tiempos and embarque.tiempos|attr(attrname) %}
+                                        value="{{ (embarque.tiempos|attr(attrname)).strftime('%Y-%m-%dT%H:%M') }}"
+                                    {% endif %}>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        <div class="row g-3 mt-2">
+                            <div class="col-md-6 small">
+                                <span class="text-muted">Tiempo en planta:</span>
+                                <span id="calc-tplanta" class="fw-semibold">-</span>
+                                <span class="text-muted ms-4">Tiempo documental:</span>
+                                <span id="calc-tdoc" class="fw-semibold">-</span>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    {# Observaciones #}
+                    <fieldset class="mb-4">
+                        <label class="form-label" for="observaciones">Observaciones</label>
+                        <textarea class="form-control" id="observaciones" name="observaciones" rows="3">{% if embarque and embarque.observaciones %}{{ embarque.observaciones }}{% endif %}</textarea>
+                    </fieldset>
+
+                    <div class="d-flex gap-2 justify-content-end mt-4">
+                        <a href="{{ url_for('listar_embarques') }}" class="btn btn-outline-secondary">Cancelar</a>
+                        <button type="submit" class="btn btn-primary">
+                            {% if modo == 'nuevo' %}Guardar embarque{% else %}Guardar cambios{% endif %}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// ==========================================================================
+// Variables globales y utilidades
+// ==========================================================================
+const REGEX_LOTE = /^\d{3}-\d{8}-\d{6}$/;
+let lotesDisponibles = [];
+
+// Cargar lotes desde la API
+fetch("{{ url_for('api_embarques_lotes') }}")
+    .then(r => r.json())
+    .then(data => {
+        lotesDisponibles = data.lotes || [];
+        {% if embarque %}
+            // Si es edición, repintar las filas de lotes del embarque actual
+            {% for el in embarque.lotes %}
+                (function(){
+                    const lote = lotesDisponibles.find(l => l.id_lote === {{ el.lote.id_lote }});
+                    agregarFilaLote(
+                        {% if lote %}{{ lote.id_lote }}, '{{ lote.codigo_lote }}', {{ lote.galones_disponibles }}, {{ el.cantidad }});
+                    {% else %}
+                        {{ el.lote.id_lote }}, '{{ el.lote.codigo_lote }}', 0, {{ el.cantidad }});
+                    {% endif %}
+                })();
+            {% endfor %}
+        {% endif %}
+    });
+
+// ==========================================================================
+// Actualizar campos calculados (semana/mes) cuando cambia la fecha
+// ==========================================================================
+const fch = document.getElementById('fecha_embarque');
+function actualizarFechaCalc() {
+    const elSem = document.getElementById('calc-semana');
+    const elMes = document.getElementById('calc-mes');
+    if (!fch.value) { elSem.textContent = '-'; elMes.textContent = '-'; return; }
+    const d = new Date(fch.value + 'T00:00:00');
+    const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+    elMes.textContent = meses[d.getMonth()].charAt(0).toUpperCase() + meses[d.getMonth()].slice(1);
+    // Semana ISO
+    const tmp = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    const dayNum = tmp.getUTCDay() || 7;
+    tmp.setUTCDate(tmp.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
+    const semana = Math.ceil(((tmp - yearStart) / 86400000 + 1) / 7);
+    elSem.textContent = 'S' + semana;
+}
+if (fch) fch.addEventListener('change', actualizarFechaCalc);
+actualizarFechaCalc();
+
+// ==========================================================================
+// Mostrar/ocultar grupos según tipo_unidad
+// ==========================================================================
+const selTU = document.getElementById('tipo_unidad');
+const grupos = {
+    pipa: document.getElementById('grupo-pipa'),
+    caja: document.getElementById('grupo-caja'),
+    tambor: document.getElementById('grupo-tambor'),
+};
+const msgSinGrupo = document.getElementById('sin-grupo');
+
+function actualizarGrupoDetalle(val) {
+    const opcion = selTU.selectedOptions[0];
+    const grupo = opcion ? opcion.getAttribute('data-grupo') : '';
+    Object.values(grupos).forEach(el => el.classList.add('d-none'));
+    if (grupo && grupos[grupo]) {
+        grupos[grupo].classList.remove('d-none');
+        msgSinGrupo.classList.add('d-none');
+    } else {
+        msgSinGrupo.classList.remove('d-none');
+    }
+}
+if (selTU) {
+    selTU.addEventListener('change', e => actualizarGrupoDetalle(e.target.value));
+    actualizarGrupoDetalle(selTU.value);
+}
+
+// ==========================================================================
+// Repetidor de lotes
+// ==========================================================================
+function agregarFilaLote(idSel = null, codigoSel = '', galDisp = 0, cant = '') {
+    const tbody = document.getElementById('tbody-lotes');
+    const tr = document.createElement('tr');
+
+    // Columna 1: selector de lote
+    const tdSel = document.createElement('select');
+    tdSel.className = 'form-select form-select-sm lotes-select';
+    tdSel.name = 'lotes_ids[]';
+    tdSel.required = true;
+    const op0 = document.createElement('option');
+    op0.value = '';
+    op0.textContent = '-- Selecciona lote --';
+    tdSel.appendChild(op0);
+    lotesDisponibles.forEach(l => {
+        const o = document.createElement('option');
+        o.value = l.id_lote;
+        o.textContent = l.codigo_lote + (l.cliente ? ' (' + l.cliente + ')' : '');
+        o.setAttribute('data-galones', l.galones_disponibles || 0);
+        if (idSel && idSel == l.id_lote) o.selected = true;
+        tdSel.appendChild(o);
+    });
+    const td1 = document.createElement('td');
+    td1.appendChild(tdSel);
+    tr.appendChild(td1);
+
+    // Columna 2: cantidad
+    const tdCant = document.createElement('input');
+    tdCant.type = 'number';
+    tdCant.step = '0.01';
+    tdCant.min = '0';
+    tdCant.className = 'form-control form-control-sm lotes-cant';
+    tdCant.name = 'lotes_cantidades[]';
+    tdCant.value = cant || '';
+    tdCant.required = true;
+    tdCant.addEventListener('input', recalcularTotalLotes);
+    const td2 = document.createElement('td');
+    td2.appendChild(tdCant);
+    tr.appendChild(td2);
+
+    // Columna 3: galones disponibles
+    const td3 = document.createElement('td');
+    td3.className = 'small text-muted galones-disp';
+    td3.textContent = galDisp ? Number(galDisp).toLocaleString() : '-';
+    tr.appendChild(td3);
+
+    // Columna 4: botón eliminar
+    const btnDel = document.createElement('button');
+    btnDel.className = 'btn btn-sm btn-outline-danger';
+    btnDel.type = 'button';
+    btnDel.innerHTML = '<i class="bi bi-trash"></i>';
+    btnDel.onclick = () => { tr.remove(); recalcularTotalLotes(); };
+    const td4 = document.createElement('td');
+    td4.appendChild(btnDel);
+    tr.appendChild(td4);
+
+    // Cuando el selector cambia, actualizar galones disponibles
+    tdSel.addEventListener('change', e => {
+        const id = parseInt(tdSel.value || 0);
+        const lote = lotesDisponibles.find(l => l.id_lote === id);
+        td3.textContent = lote ? Number(lote.galones_disponibles || 0).toLocaleString() : '-';
+    });
+    tbody.appendChild(tr);
+    recalcularTotalLotes();
+}
+
+function recalcularTotalLotes() {
+    const cants = document.querySelectorAll('.lotes-cant');
+    let total = 0;
+    cants.forEach(inp => {
+        const v = parseFloat((inp.value || '0').replace(',', '')) || 0;
+        total += v;
+    });
+    document.getElementById('total-lotes').textContent = total.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    document.getElementById('alert-lotes').classList.toggle('d-none', cants.length > 0);
+}
+
+// ==========================================================================
+// Cálculo de tiempos en planta y documental
+// ==========================================================================
+function calcularTiemposCalc() {
+    const g = id => document.getElementById(id).value;
+    const toDt = v => v ? new Date(v) : null;
+    const entrada = toDt(g('t_entrada'));
+    const salida = toDt(g('t_salida'));
+    const doc = toDt(g('t_documentacion'));
+    const fmt = ms => {
+        if (!ms || ms <= 0) return '-';
+        const h = Math.floor(ms / 3600000);
+        const m = Math.round((ms % 3600000) / 60000);
+        return h + ' h ' + m + ' min';
+    };
+    const elTp = document.getElementById('calc-tplanta');
+    if (elTp) elTp.textContent = fmt(salida && entrada ? (salida - entrada) : 0);
+    const elTd = document.getElementById('calc-tdoc');
+    if (elTd) elTd.textContent = fmt(salida && doc ? (salida - doc) : 0);
+}
+
+// ==========================================================================
+// Validación del formulario (duplicidad sello / errores por campo
+// ==========================================================================
+document.getElementById('form-embarque').addEventListener('submit', function(e) {
+    // 1) validación nativa Bootstrap
+    if (!this.checkValidity()) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+    // 2) lotes
+    const filasLotes = document.querySelectorAll('#tbody-lotes > tr');
+    if (filasLotes.length === 0) {
+        e.preventDefault();
+        document.getElementById('alert-lotes').classList.remove('d-none');
+        flash('Agrega al menos un lote.', 'danger');
+    }
+    this.classList.add('was-validated');
+});
+
+// Función flash simulado en navegador (no sustituye al servidor)
+function flash(msg, tipo) {
+    // Crea un alert temporal arriba del formulario para mensajes que el servidor
+    // devolvería como flash. Aquí solo es ayuda visual rápida del lado cliente.
+    const cont = document.querySelector('.container.mt-4');
+    const div = document.createElement('div');
+    div.className = 'alert alert-' + (tipo === 'danger' ? 'danger' : 'info') + ' alert-dismissible fade show';
+    div.innerHTML = msg + ' <button type="button" class="btn-close" data-bs-dismiss="alert"></button>';
+    cont.prepend(div);
+}
+</script>
+{% endblock %}

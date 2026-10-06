@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block title %}Registro de Salida{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card shadow">
+            <div class="card-header bg-danger text-white">
+                <h5 class="mb-0"><i class="bi bi-dash-circle"></i> Registrar Salida de Producto (LIFO: último en entrar, primero en salir)</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST">
+                    <div class="mb-3">
+                        <label for="id_silo" class="form-label">Silo de Origen</label>
+                        <select class="form-select" id="id_silo" name="id_silo" required>
+                            <option value="" selected disabled>Seleccione un silo...</option>
+                            {% for silo in silos %}
+                            <option value="{{ silo.id_silo }}">{{ silo.nombre_silo }}{% if silo.tipo_producto %} ({{ silo.tipo_producto|capitalize }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="galones" class="form-label">Galones a Retirar</label>
+                        <input type="number" step="0.01" class="form-control" id="galones" name="galones" required>
+                        <div class="form-text">El sistema tomará automáticamente los lotes más recientes primero (posición 1).</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="destino" class="form-label">Destino / Cliente</label>
+                        <input type="text" class="form-control" id="destino" name="destino" placeholder="Ej: Pipa #45 / Cliente X">
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="placa" class="form-label">Número de Placa</label>
+                        <input type="text" class="form-control" id="placa" name="placa" required maxlength="9" inputmode="numeric" pattern="\d{1,9}" placeholder="Solo números (máx. 9 dígitos)">
+                        <div class="form-text">Solo se permiten números. Ejemplo: 123456789</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="observaciones" class="form-label">Observaciones</label>
+                        <textarea class="form-control" id="observaciones" name="observaciones" rows="3"></textarea>
+                    </div>
+
+                    <div class="d-flex justify-content-end gap-2">
+                        <a href="{{ url_for('index') }}" class="btn btn-outline-secondary">Cancelar</a>
+                        <button type="submit" class="btn btn-danger">Confirmar Salida</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const placaInput = document.getElementById('placa');
+
+placaInput.addEventListener('input', function() {
+    const valor = this.value.replace(/\D/g, '');
+    this.value = valor.slice(0, 9);
+    const regex = /^\d{1,9}$/;
+    const alertDiv = document.getElementById('placa-alert');
+    
+    if (this.value && !regex.test(this.value)) {
+        this.classList.add('is-invalid');
+        this.classList.remove('is-valid');
+        if (!alertDiv) {
+            const newAlert = document.createElement('div');
+            newAlert.className = 'alert alert-danger mt-2';
+            newAlert.id = 'placa-alert';
+            newAlert.innerHTML = '<i class="bi bi-exclamation-triangle"></i> Solo se permiten números (máximo 9 dígitos).';
+            this.parentNode.appendChild(newAlert);
+        }
+    } else {
+        this.classList.remove('is-invalid');
+        if (this.value) {
+            this.classList.add('is-valid');
+        } else {
+            this.classList.remove('is-valid');
+        }
+        if (alertDiv) alertDiv.remove();
+    }
+});
+
+document.querySelector('form').addEventListener('submit', function(e) {
+    const regex = /^\d{1,9}$/;
+    if (!regex.test(placaInput.value)) {
+        e.preventDefault();
+        placaInput.classList.add('is-invalid');
+        let alertDiv = document.getElementById('placa-alert');
+        if (!alertDiv) {
+            alertDiv = document.createElement('div');
+            alertDiv.className = 'alert alert-danger mt-2';
+            alertDiv.id = 'placa-alert';
+            alertDiv.innerHTML = '<i class="bi bi-exclamation-triangle"></i> Ingrese un número de placa válido (solo números, máx. 9 dígitos).';
+            placaInput.parentNode.appendChild(alertDiv);
+        }
+        placaInput.focus();
+    }
+});
+</script>
+{% endblock %}

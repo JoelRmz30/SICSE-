@@ -1,0 +1,87 @@
+body {
+    background: radial-gradient(1200px circle at 20% 0%, rgba(11, 107, 58, 0.10), transparent 55%),
+                radial-gradient(900px circle at 90% 10%, rgba(245, 124, 0, 0.08), transparent 45%),
+                #f8f9fa;
+}
+
+:root {
+    --brand-green: #0b6b3a;
+    --brand-green-dark: #07512c;
+    --brand-orange: #f57c00;
+}
+
+.card {
+    border-radius: 10px;
+    border: none;
+}
+
+.card-header {
+    border-bottom: 1px solid rgba(0,0,0,.125);
+    font-weight: bold;
+}
+
+.navbar {
+    box-shadow: 0 2px 4px rgba(0,0,0,.1);
+}
+
+.navbar-brand img {
+    display: block;
+    height: 28px;
+    width: auto;
+}
+
+.progress {
+    background-color: rgba(255,255,255,0.2);
+}
+
+.table-hover tbody tr:hover {
+    background-color: rgba(0,0,0,.02);
+}
+
+.btn-primary {
+    background-color: var(--brand-green);
+    border: none;
+}
+
+.btn-primary:hover {
+    background-color: var(--brand-green-dark);
+}
+
+.bg-dark {
+    background-color: var(--brand-green) !important;
+}
+
+.bg-primary {
+    background-color: var(--brand-green) !important;
+}
+
+.text-accent {
+    color: var(--brand-orange) !important;
+}
+
+.btn-accent {
+    background-color: var(--brand-orange);
+    border: none;
+    color: #fff;
+}
+
+.btn-accent:hover {
+    background-color: #db6f00;
+    color: #fff;
+}
+
+.badge.bg-success {
+    background-color: var(--brand-green) !important;
+}
+
+.bg-nfc {
+    background-color: #6f42c1 !important;
+}
+
+.silo-aceite-row {
+    background-color: rgba(245, 124, 0, 0.06);
+}
+
+.silo-nfc-row {
+    background-color: rgba(111, 66, 193, 0.06);
+}

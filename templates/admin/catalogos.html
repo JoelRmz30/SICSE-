@@ -1,0 +1,222 @@
+{# ==========================================================================
+   Pantalla genérica de administración de catálogos del módulo de embarques.
+   Renderiza tabs para cada catálogo (CATALOGOS_EMBARQUES), formulario de
+   alta/edición arriba y tabla con acciones (editar / activar-desactivar).
+   Todos los catálogos usan borrado lógico (campo activo BOOLEAN).
+   Los datos de la tabla ya vienen preparados desde el backend en items_display.
+   ========================================================================== #}
+{% extends "base.html" %}
+{% block title %}{{ meta.nombre_visible }} - Catálogos{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-xl-10 col-lg-11">
+
+        <div class="card shadow mb-4">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <h5 class="mb-0">
+                    <i class="bi bi-bookmarks me-2"></i>Catálogos de embarques
+                </h5>
+                <a href="{{ url_for('listar_embarques') }}" class="btn btn-sm btn-outline-light">
+                    <i class="bi bi-arrow-left me-1"></i>Volver a embarques
+                </a>
+            </div>
+            <div class="card-body pt-3 pb-0">
+                {# Tabs para los 6 catálogos #}
+                <ul class="nav nav-tabs mb-3" role="tablist">
+                    {% set tabs_labels = {
+                        'productos_embarque': 'Productos',
+                        'transportistas': 'Transportistas',
+                        'operadores': 'Operadores',
+                        'unidades_transporte': 'Unidades transporte',
+                        'lavaderos': 'Lavaderos',
+                        'facilitadores': 'Facilitadores',
+                    } %}
+                    {% for h in catalogos_hijos %}
+                    <li class="nav-item" role="presentation">
+                        <a class="nav-link {{ 'active' if nombre == h else '' }}"
+                           href="{{ url_for('gestionar_catalogo', nombre=h) }}">
+                            {{ tabs_labels.get(h, h) }}
+                        </a>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+
+        {# Formulario de alta / edición #}
+        <div class="card shadow mb-4">
+            <div class="card-header bg-light fw-semibold d-flex justify-content-between align-items-center">
+                <span id="form-title">
+                    <i class="bi bi-plus-circle me-1"></i>Nuevo
+                    {% if meta.nombre_visible.endswith('s') %}
+                        {{ meta.nombre_visible[:-1] }}
+                    {% else %}
+                        {{ meta.nombre_visible }}
+                    {% endif %}
+                </span>
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-limpiar" style="display:none;">
+                    <i class="bi bi-x-lg me-1"></i>Cancelar edición
+                </button>
+            </div>
+            <div class="card-body">
+                <form method="POST" class="row g-3" id="form-catalogo" novalidate>
+                    <input type="hidden" name="accion" value="guardar">
+                    <input type="hidden" name="id_item" id="id_item" value="">
+                    {% for fname, flabel, ftype, freq in meta.campos %}
+                    <div class="col-md-6">
+                        <label class="form-label" for="f-{{ fname }}">
+                            {{ flabel }}
+                            {% if freq %}<span class="text-danger">*</span>{% endif %}
+                        </label>
+                        {% if ftype == 'text' %}
+                        <input type="text" class="form-control" id="f-{{ fname }}" name="{{ fname }}"
+                            {% if freq %}required{% endif %}>
+                        {% elif ftype is string and ftype[:3] == 'fk:' %}
+                        <select class="form-select" id="f-{{ fname }}" name="{{ fname }}">
+                            <option value="">Ninguno</option>
+                            {% if fk_opciones and fk_opciones.get(fname) %}
+                                {% for fk_row in fk_opciones[fname] %}
+                                    {% set fk_pk_val = fk_row.id_transportista if 'id_transportista' in fk_row.__dict__ else fk_row.id if fk_row.id else '' %}
+                                    {% set fk_txt = fk_row.nombre if 'nombre' in fk_row.__dict__ else '' %}
+                                    <option value="{{ fk_pk_val }}">{{ fk_txt or fk_pk_val }}</option>
+                                {% endfor %}
+                            {% endif %}
+                        </select>
+                        {% else %}
+                        {% set _vals = ftype[1] %}
+                        {% set _lbls = ftype[2] %}
+                        <select class="form-select" id="f-{{ fname }}" name="{{ fname }}" {% if freq %}required{% endif %}>
+                            <option value="">Selecciona...</option>
+                            {% for i in range(_vals|length) %}
+                            <option value="{{ _vals[i] }}">{{ _lbls[i] }}</option>
+                            {% endfor %}
+                        </select>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                    <div class="col-12 d-flex justify-content-end gap-2">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-save me-1"></i>Guardar
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        {# Tabla de registros #}
+        <div class="card shadow">
+            <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                <span class="fw-semibold">
+                    <i class="bi bi-table me-1"></i>Registros ({{ items_display|length }})
+                </span>
+                <span class="small text-muted">
+                    <span class="badge bg-success me-1">Activo</span>
+                    <span class="badge bg-secondary">Inactivo</span>
+                </span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light small text-muted">
+                            <tr>
+                                <th style="width:6%">ID</th>
+                                {% for fname, flabel, _ft, _fr in meta.campos %}
+                                <th>{{ flabel }}</th>
+                                {% endfor %}
+                                <th style="width:10%">Estado</th>
+                                <th style="width:18%" class="text-end">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for fila in items_display %}
+                            <tr>
+                                <td class="text-muted">{{ fila.pk }}</td>
+                                {% for fname, _fl, _ft, _fr in meta.campos %}
+                                <td>{{ fila.cellas[fname] }}</td>
+                                {% endfor %}
+                                <td>
+                                    {% if fila.activo %}
+                                    <span class="badge bg-success">Activo</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">Inactivo</span>
+                                    {% endif %}
+                                </td>
+                                <td class="text-end">
+                                    <button type="button" class="btn btn-sm btn-outline-primary btn-edit"
+                                        data-id="{{ fila.pk }}"
+                                        {% for fname, _fl, _ft, _fr in meta.campos %}
+                                            data-{{ fname }}="{{ fila.raw[fname] }}"
+                                        {% endfor %}>
+                                        <i class="bi bi-pencil me-1"></i>Editar
+                                    </button>
+                                    <form method="POST" class="d-inline" onsubmit="return confirm('¿Cambiar el estado de este registro?');">
+                                        <input type="hidden" name="accion" value="toggle_activo">
+                                        <input type="hidden" name="id_item" value="{{ fila.pk }}">
+                                        <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                            {% if fila.activo %}<i class="bi bi-power me-1"></i>Desactivar{% else %}<i class="bi bi-play me-1"></i>Activar{% endif %}
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="{{ 3 + meta.campos|length }}" class="text-center text-muted py-4">
+                                    Aún no hay registros. Usa el formulario de arriba para agregar el primero.
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// ==========================================================================
+// Lógica para cargar datos del item a editar en el formulario (y limpiar)
+// ==========================================================================
+const form = document.getElementById('form-catalogo');
+const titleForm = document.getElementById('form-title');
+const btnLimpiar = document.getElementById('btn-limpiar');
+const idItemInput = document.getElementById('id_item');
+
+function singularNombre() {
+    const base = {{ meta.nombre_visible | tojson }};
+    return base.endsWith('s') ? base.slice(0, -1) : base;
+}
+
+document.querySelectorAll('.btn-edit').forEach(btn => {
+    btn.addEventListener('click', () => {
+        idItemInput.value = btn.dataset.id || '';
+        titleForm.innerHTML = '<i class="bi bi-pencil me-1"></i>Editar ' + singularNombre();
+        btnLimpiar.style.display = '';
+        {% for fname, _fl, _ft, _fr in meta.campos %}
+        (function(){
+            const inp = document.getElementById('f-{{ fname }}');
+            if (!inp) return;
+            let v = btn.dataset['{{ fname }}'] || '';
+            if (inp.tagName === 'SELECT') {
+                inp.value = v;
+            } else {
+                inp.value = v;
+            }
+        })();
+        {% endfor %}
+        window.scrollTo({ top: form.offsetTop - 80, behavior: 'smooth' });
+    });
+});
+
+btnLimpiar.addEventListener('click', () => {
+    form.reset();
+    idItemInput.value = '';
+    titleForm.innerHTML = '<i class="bi bi-plus-circle me-1"></i>Nuevo ' + singularNombre();
+    btnLimpiar.style.display = 'none';
+});
+</script>
+{% endblock %}

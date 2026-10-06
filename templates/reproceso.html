@@ -1,0 +1,274 @@
+{% extends "base.html" %}
+
+{% block title %}Registro de Reproceso{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card shadow">
+            <div class="card-header bg-warning text-dark">
+                <h5 class="mb-0"><i class="bi bi-arrow-repeat"></i> Registro de Reproceso</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST">
+                    <div class="row mb-4">
+                        <div class="col-md-6">
+                            <label for="codigo_lote" class="form-label">Lote a Reprocesar</label>
+                            <select class="form-select" id="codigo_lote" name="codigo_lote" required onchange="updateLoteInfo()">
+                                <option value="" selected disabled>Selecciona un lote...</option>
+                                {% for lote_data in lotes %}
+                                <option value="{{ lote_data.lote.codigo_lote }}" data-galones="{{ lote_data.total_galones }}" data-estado="{{ lote_data.lote.estado.nombre_estado }}">
+                                    {{ lote_data.lote.codigo_lote }} - {{ lote_data.lote.estado.nombre_estado }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="galones" class="form-label">Galones a Reprocesar</label>
+                            <input type="number" step="0.01" class="form-control" id="galones" name="galones" required min="0">
+                            <div class="form-text">
+                                <strong>Disponible:</strong> <span id="galones-disponibles">0.00</span> gal
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="row mb-4">
+                        <div class="col-md-6">
+                            <label for="nuevo_estado" class="form-label">Nuevo Estado del Lote</label>
+                            <select class="form-select" id="nuevo_estado" name="nuevo_estado" required>
+                                {% for estado in estados %}
+                                <option value="{{ estado.id_estado }}" {% if 'Liberado' in estado.nombre_estado %}selected{% endif %}>
+                                    {{ estado.nombre_estado }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            <div class="form-text">Selecciona el estado después del reproceso</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Estado Actual del Lote</label>
+                            <div class="input-group">
+                                <span class="form-control bg-light" id="estado-actual">
+                                    <span class="badge bg-secondary">Selecciona un lote</span>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <label for="observaciones" class="form-label">Observaciones</label>
+                        <textarea class="form-control" id="observaciones" name="observaciones" rows="3" placeholder="Describe el motivo del reproceso..."></textarea>
+                    </div>
+
+                    <div class="accordion mb-4" id="datosEmbarqueAcc">
+                        <div class="accordion-item">
+                            <h2 class="accordion-header" id="datosEmbarqueHead">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#datosEmbarqueBody" aria-expanded="false" aria-controls="datosEmbarqueBody">
+                                    Datos de embarque (opcional)
+                                </button>
+                            </h2>
+                            <div id="datosEmbarqueBody" class="accordion-collapse collapse" aria-labelledby="datosEmbarqueHead" data-bs-parent="#datosEmbarqueAcc">
+                                <div class="accordion-body">
+                                    <div class="row g-3">
+                                        <div class="col-md-4">
+                                            <label for="fecha_embarque" class="form-label">Fecha de embarque</label>
+                                            <input type="date" class="form-control" id="fecha_embarque" name="fecha_embarque">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label for="estatus" class="form-label">Estatus</label>
+                                            <input type="text" class="form-control" id="estatus" name="estatus" value="REPROCESADO">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label for="turno" class="form-label">Turno</label>
+                                            <input type="text" class="form-control" id="turno" name="turno" placeholder="Ej: 1">
+                                        </div>
+
+                                        <div class="col-md-6">
+                                            <label for="fecha_hora_cita" class="form-label">Fecha y hora de cita</label>
+                                            <input type="datetime-local" class="form-control" id="fecha_hora_cita" name="fecha_hora_cita">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label for="fecha_hora_registro_llegada" class="form-label">Fecha y hora de registro llegada planta</label>
+                                            <input type="datetime-local" class="form-control" id="fecha_hora_registro_llegada" name="fecha_hora_registro_llegada">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label for="fecha_hora_entrada_planta" class="form-label">Fecha y hora de entrada a planta</label>
+                                            <input type="datetime-local" class="form-control" id="fecha_hora_entrada_planta" name="fecha_hora_entrada_planta">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label for="fecha_hora_salida_planta" class="form-label">Fecha y hora de salida de planta</label>
+                                            <input type="datetime-local" class="form-control" id="fecha_hora_salida_planta" name="fecha_hora_salida_planta">
+                                        </div>
+
+                                        <div class="col-md-6">
+                                            <label for="numero_economico_placa" class="form-label">Número económico / Placa / Contenedor</label>
+                                            <input type="text" class="form-control" id="numero_economico_placa" name="numero_economico_placa" placeholder="Ej: ZMOU8835537/74UF7M">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label for="tipo_unidad" class="form-label">Tipo de unidad</label>
+                                            <input type="text" class="form-control" id="tipo_unidad" name="tipo_unidad" placeholder="Ej: FLEXITANQUE">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label for="linea_transportista" class="form-label">Línea transportista</label>
+                                            <input type="text" class="form-control" id="linea_transportista" name="linea_transportista" placeholder="Ej: ODYSSEY">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label for="operador" class="form-label">Operador</label>
+                                            <input type="text" class="form-control" id="operador" name="operador" placeholder="Nombre del operador">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label for="sellos" class="form-label">Sellos</label>
+                                            <input type="text" class="form-control" id="sellos" name="sellos" placeholder="Ej: 169301-169302">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label for="sello_valvula" class="form-label">Sello válvula</label>
+                                            <input type="text" class="form-control" id="sello_valvula" name="sello_valvula" placeholder="Ej: A00175-110663">
+                                        </div>
+                                        <div class="col-12">
+                                            <label for="comentarios" class="form-label">Comentarios</label>
+                                            <input type="text" class="form-control" id="comentarios" name="comentarios" placeholder="Comentarios adicionales">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="d-flex justify-content-end gap-2">
+                        <a href="{{ url_for('index') }}" class="btn btn-outline-secondary">Cancelar</a>
+                        <button type="submit" class="btn btn-warning text-dark">Registrar Reproceso</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row justify-content-center mt-4">
+    <div class="col-md-10">
+        <div class="card shadow">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Historial de Reprocesos</h5>
+            </div>
+            <div class="card-body">
+                <form method="GET" class="row g-3 mb-3">
+                    <div class="col-md-4">
+                        <label for="f_lote" class="form-label">Lote</label>
+                        <input type="text" class="form-control" id="f_lote" name="f_lote" value="{{ request.args.get('f_lote','') }}" placeholder="Código de lote">
+                    </div>
+                    <div class="col-md-4">
+                        <label for="f_placa" class="form-label">Placa / Contenedor</label>
+                        <input type="text" class="form-control" id="f_placa" name="f_placa" value="{{ request.args.get('f_placa','') }}" placeholder="Ej: ZMOU...">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="f_fecha_inicio" class="form-label">Desde</label>
+                        <input type="date" class="form-control" id="f_fecha_inicio" name="f_fecha_inicio" value="{{ request.args.get('f_fecha_inicio','') }}">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="f_fecha_fin" class="form-label">Hasta</label>
+                        <input type="date" class="form-control" id="f_fecha_fin" name="f_fecha_fin" value="{{ request.args.get('f_fecha_fin','') }}">
+                    </div>
+                    <div class="col-12 d-flex justify-content-end">
+                        <button type="submit" class="btn btn-primary me-2">Filtrar</button>
+                        <a href="{{ url_for('registrar_reproceso') }}" class="btn btn-outline-secondary">Limpiar</a>
+                    </div>
+                </form>
+
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Lote</th>
+                                <th>Silo</th>
+                                <th class="text-end">Gal</th>
+                                <th>Estado</th>
+                                <th>Placa/Cont.</th>
+                                <th class="text-end">Detalle</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for r in reprocesos %}
+                            {% set cid = "repDet" ~ loop.index %}
+                            <tr>
+                                <td>{{ r.mov.fecha_movimiento.strftime('%d/%m/%Y %H:%M') }}</td>
+                                <td>{{ r.mov.lote.codigo_lote if r.mov.lote else '-' }}</td>
+                                <td>{{ r.mov.silo.nombre_silo if r.mov.silo else '-' }}</td>
+                                <td class="text-end">{{ "{:,.2f}".format(r.mov.galones) }}</td>
+                                <td>
+                                    {% if r.data.get('estado_nuevo') %}
+                                        <span class="badge bg-warning text-dark">{{ r.data.get('estado_nuevo') }}</span>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ r.data.get('numero_economico_placa','-') }}</td>
+                                <td class="text-end">
+                                    <button class="btn btn-sm btn-outline-secondary"
+                                            type="button"
+                                            data-bs-toggle="collapse"
+                                            data-bs-target="#{{ cid }}"
+                                            aria-expanded="false"
+                                            aria-controls="{{ cid }}">
+                                        <i class="bi bi-list-ul"></i> Ver
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr class="collapse" id="{{ cid }}">
+                                <td colspan="7" class="bg-light">
+                                    <div class="row g-2 py-2">
+                                        <div class="col-md-4"><small class="text-muted">Estatus:</small> {{ r.data.get('estatus','-') }}</div>
+                                        <div class="col-md-4"><small class="text-muted">Tipo unidad:</small> {{ r.data.get('tipo_unidad','-') }}</div>
+                                        <div class="col-md-4"><small class="text-muted">Transportista:</small> {{ r.data.get('linea_transportista','-') }}</div>
+                                        <div class="col-md-6"><small class="text-muted">Operador:</small> {{ r.data.get('operador','-') }}</div>
+                                        <div class="col-md-3"><small class="text-muted">Sellos:</small> {{ r.data.get('sellos','-') }}</div>
+                                        <div class="col-md-3"><small class="text-muted">Sello válvula:</small> {{ r.data.get('sello_valvula','-') }}</div>
+                                        <div class="col-md-3"><small class="text-muted">Turno:</small> {{ r.data.get('turno','-') }}</div>
+                                        <div class="col-md-9"><small class="text-muted">Motivo:</small> {{ r.data.get('motivo','-') }}</div>
+                                        <div class="col-12"><small class="text-muted">Comentarios:</small> {{ r.data.get('comentarios','-') }}</div>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="7" class="text-center text-muted py-4">No hay reprocesos registrados</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function updateLoteInfo() {
+    const select = document.getElementById('codigo_lote');
+    const selectedOption = select.options[select.selectedIndex];
+    
+    if (selectedOption.value) {
+        const galonesDisponibles = selectedOption.getAttribute('data-galones');
+        const estadoActual = selectedOption.getAttribute('data-estado');
+        
+        document.getElementById('galones-disponibles').textContent = parseFloat(galonesDisponibles).toFixed(2);
+        document.getElementById('galones').max = parseFloat(galonesDisponibles);
+        document.getElementById('galones').value = parseFloat(galonesDisponibles).toFixed(2);
+        
+        // Actualizar el badge de estado
+        let estadoBadge;
+        if (estadoActual.includes('Liberado')) {
+            estadoBadge = '<span class="badge bg-success text-white">' + estadoActual + '</span>';
+        } else if (estadoActual.includes('Reproceso') || estadoActual.includes('No apto')) {
+            estadoBadge = '<span class="badge bg-danger text-white">' + estadoActual + '</span>';
+        } else if (estadoActual.includes('Pendiente')) {
+            estadoBadge = '<span class="badge bg-warning text-dark">' + estadoActual + '</span>';
+        } else {
+            estadoBadge = '<span class="badge bg-info text-white">' + estadoActual + '</span>';
+        }
+        document.getElementById('estado-actual').innerHTML = estadoBadge;
+    }
+}
+</script>
+{% endblock %}

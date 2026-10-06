@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+
+{% block title %}Historial de Movimientos{% endblock %}
+
+{% block content %}
+<div class="row mb-4 align-items-center">
+    <div class="col-md-6">
+        <h2>Historial de Movimientos</h2>
+    </div>
+    <div class="col-md-6 text-end">
+        <a href="{{ url_for('exportar_historial', id_silo=request.args.get('id_silo'), tipo=request.args.get('tipo'), fecha_inicio=request.args.get('fecha_inicio'), fecha_fin=request.args.get('fecha_fin'), codigo_lote=request.args.get('codigo_lote'), tipo_producto=request.args.get('tipo_producto')) }}" class="btn btn-success">
+            <i class="bi bi-file-earmark-excel"></i> Exportar a Excel
+        </a>
+    </div>
+</div>
+
+<!-- Filtros -->
+<div class="card shadow mb-4">
+    <div class="card-body">
+        <form method="GET" class="row g-3">
+            <div class="col-md-3">
+                <label for="id_silo" class="form-label">Silo</label>
+                <select name="id_silo" id="id_silo" class="form-select">
+                    <option value="">Todos los silos</option>
+                    {% for silo in silos %}
+                    <option value="{{ silo.id_silo }}" {{ 'selected' if request.args.get('id_silo')|int == silo.id_silo else '' }}>
+                        {{ silo.nombre_silo }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label for="tipo" class="form-label">Tipo de Movimiento</label>
+                <select name="tipo" id="tipo" class="form-select">
+                                <option value="">Todos los tipos</option>
+                                <option value="entrada" {{ 'selected' if request.args.get('tipo') == 'entrada' else '' }}>Entrada</option>
+                                <option value="salida" {{ 'selected' if request.args.get('tipo') == 'salida' else '' }}>Salida</option>
+                                <option value="ajuste" {{ 'selected' if request.args.get('tipo') == 'ajuste' else '' }}>Ajuste</option>
+                                <option value="reproceso" {{ 'selected' if request.args.get('tipo') == 'reproceso' else '' }}>Reproceso</option>
+                                <option value="cambio_estado" {{ 'selected' if request.args.get('tipo') == 'cambio_estado' else '' }}>Cambio de Estado</option>
+                            </select>
+            </div>
+            <div class="col-md-3">
+                <label for="tipo_producto" class="form-label">Tipo de Producto</label>
+                <input list="tipos_producto" name="tipo_producto" id="tipo_producto" class="form-control" value="{{ request.args.get('tipo_producto', '') }}" placeholder="Ej: jugo, concentrado">
+                <datalist id="tipos_producto">
+                    {% for tp in tipos_producto %}
+                    <option value="{{ tp }}"></option>
+                    {% endfor %}
+                </datalist>
+            </div>
+            <div class="col-md-3">
+                <label for="codigo_lote" class="form-label">Lote</label>
+                <input type="text" name="codigo_lote" id="codigo_lote" class="form-control" value="{{ request.args.get('codigo_lote', '') }}" placeholder="Ej: 005-20251210-044497">
+            </div>
+            <div class="col-md-3">
+                <label for="fecha_inicio" class="form-label">Desde</label>
+                <input type="date" name="fecha_inicio" id="fecha_inicio" class="form-control" value="{{ request.args.get('fecha_inicio', '') }}">
+            </div>
+            <div class="col-md-3">
+                <label for="fecha_fin" class="form-label">Hasta</label>
+                <input type="date" name="fecha_fin" id="fecha_fin" class="form-control" value="{{ request.args.get('fecha_fin', '') }}">
+            </div>
+            <div class="col-12 d-flex justify-content-end">
+                <button type="submit" class="btn btn-primary me-2">Filtrar</button>
+                <a href="{{ url_for('historial') }}" class="btn btn-outline-secondary">Limpiar</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Tabla de Movimientos -->
+<div class="card shadow">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Fecha</th>
+                        <th>Tipo</th>
+                        <th>Silo</th>
+                        <th>Lote</th>
+                        <th>Galones</th>
+                        <th>Usuario</th>
+                        <th>Observaciones</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for mov in movimientos %}
+                    <tr>
+                        <td>{{ mov.fecha_movimiento.strftime('%d/%m/%Y %H:%M') }}</td>
+                        <td>
+                            {% set t = mov.tipo_movimiento %}
+                            {% if not t %}
+                                {% if mov.observaciones and 'Cambio de estado' in mov.observaciones %}
+                                    {% set t = 'cambio_estado' %}
+                                {% else %}
+                                    {% set t = 'reproceso' %}
+                                {% endif %}
+                            {% endif %}
+                            <span class="badge {{ 'bg-success' if t == 'entrada' else 'bg-danger' if t == 'salida' else 'bg-warning text-dark' if t == 'reproceso' else 'bg-info text-white' if t == 'cambio_estado' else 'bg-secondary' }}">
+                                {{ t|replace('_', ' ')|title }}
+                            </span>
+                        </td>
+                        <td>{{ mov.silo.nombre_silo }}</td>
+                        <td>{{ mov.lote.codigo_lote }}</td>
+                        <td>{{ "{:,.2f}".format(mov.galones) }}</td>
+                        <td>{{ mov.usuario.usuario }}</td>
+                        <td><small>{{ mov.observaciones or '-' }}</small></td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="7" class="text-center text-muted py-4">No se encontraron movimientos</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

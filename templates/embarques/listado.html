@@ -1,0 +1,241 @@
+{# ==========================================================================
+   Listado de embarques.
+   Estructura:
+     - Pestañas superiores (Listado / Nuevo embarque / Cuadre de galonaje)
+     - 3 tarjetas de resumen
+     - Filtros: fecha desde/hasta, producto, tipo de unidad, texto libre
+     - Tabla responsive con paginación de 25
+     - Si listado está vacío, botón de acción "Registra tu primer embarque"
+   ========================================================================== #}
+{% extends "base.html" %}
+{% block title %}Embarques{% endblock %}
+
+{% block content %}
+<div class="mb-3 d-flex flex-wrap gap-2">
+    <a href="{{ url_for('listar_embarques') }}" class="btn btn-dark border border-secondary active">Listado</a>
+    {% if not _is_guest() %}
+    <a href="{{ url_for('nuevo_embarque') }}" class="btn btn-outline-dark border border-secondary">Nuevo embarque</a>
+    {% endif %}
+    <a href="{{ url_for('cuadre_embarques') }}" class="btn btn-outline-dark border border-secondary">Cuadre de galonaje</a>
+</div>
+
+{# Tarjetas resumen #}
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Embarques del mes</div>
+                <div class="fs-1 fw-semibold">{{ resumen.total_mes }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Kg embarcados</div>
+                <div class="fs-1 fw-semibold">{{ resumen.kg_embarcados }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div class="text-muted small mb-1">Tiempo medio en planta</div>
+                <div class="fs-1 fw-semibold">{{ resumen.tiempo_medio }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{# Filtros #}
+<form method="get" class="card shadow-sm mb-4">
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-md-3">
+                <label class="form-label small mb-1">Desde</label>
+                <input type="date" name="fecha_desde" class="form-control"
+                       value="{{ filtros.fecha_desde.strftime('%Y-%m-%d') if filtros.fecha_desde else '' }}">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small mb-1">Hasta</label>
+                <input type="date" name="fecha_hasta" class="form-control"
+                       value="{{ filtros.fecha_hasta.strftime('%Y-%m-%d') if filtros.fecha_hasta else '' }}">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small mb-1">Producto</label>
+                <select class="form-select" name="id_producto">
+                    <option value="">Todos</option>
+                    {% for p in productos %}
+                    <option value="{{ p.id_producto }}"
+                            {% if filtros.id_producto == p.id_producto %}selected{% endif %}>
+                        {{ p.descripcion }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small mb-1">Tipo de unidad</label>
+                <select class="form-select" name="tipo_unidad">
+                    <option value="">Todas</option>
+                    {% for tu in tipos_unidad %}
+                    <option value="{{ tu }}"
+                            {% if filtros.tipo_unidad == tu %}selected{% endif %}>
+                        {{ tipos_unidad_labels[tu] }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label small mb-1">Buscar</label>
+                <div class="input-group">
+                    <input type="text" name="texto_libre" class="form-control"
+                           placeholder="Cita, ticket o lote"
+                           value="{{ filtros.texto_libre or '' }}">
+                    <button class="btn btn-outline-secondary" type="submit">
+                        <i class="bi bi-search"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</form>
+
+{# Listado #}
+<div class="card shadow-sm">
+    <div class="card-body">
+        {% if not embarques %}
+            <div class="text-center py-5">
+                <h5 class="text-muted mb-3">No hay embarques registrados</h5>
+                {% if not _is_guest() %}
+                <a href="{{ url_for('nuevo_embarque') }}" class="btn btn-primary">
+                    <i class="bi bi-plus-circle me-1"></i>Registra tu primer embarque
+                </a>
+                {% endif %}
+            </div>
+        {% else %}
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead class="text-muted small">
+                    <tr>
+                        <th>Fecha</th>
+                        <th>Cita</th>
+                        <th>Producto</th>
+                        <th>Destino</th>
+                        <th>Unidad</th>
+                        <th>Cantidad</th>
+                        <th>Estatus</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for emb in embarques %}
+                    <tr>
+                        <td>{{ emb.fecha_embarque.strftime('%d/%m/%Y') if emb.fecha_embarque else '' }}</td>
+                        <td><span class="font-monospace small">{{ emb.num_cita }}</span></td>
+                        <td>
+                            {% if emb.producto %}
+                                {% set desc = emb.producto.descripcion or '' %}
+                                {% if desc|length > 24 %}{{ desc[:22] }}..{% else %}{{ desc }}{% endif %}
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if emb.cliente %}
+                                {% set nom = (emb.cliente.codigo ~ ' - ' if emb.cliente.codigo else '') ~ emb.cliente.nombre_cliente %}
+                                {% if nom|length > 18 %}{{ nom[:16] }}..{% else %}{{ nom }}{% endif %}
+                            {% endif %}
+                        </td>
+                        <td>{{ tipos_unidad_labels.get(emb.tipo_unidad, emb.tipo_unidad) }}</td>
+                        <td>
+                            {% set total = emb.cantidad_total %}
+                            {% set um = emb.producto.unidad_medida if emb.producto else '' %}
+                            {% if um == 'KG' %}
+                                {{ '{:,.0f}'.format(total|float) }} kg
+                            {% elif um == 'TAZ' %}
+                                {{ '{:,.0f}'.format(total|float) }} TAZ
+                            {% else %}
+                                {{ '{:,.2f}'.format(total|float) }}
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% set estatus_label = {
+                                'programado': 'Programado',
+                                'en_planta': 'En planta',
+                                'cargado': 'Cargado',
+                                'cancelado': 'Cancelado'
+                            } %}
+                            <span class="badge bg-{{ emb.badge_estatus }}">
+                                {{ estatus_label.get(emb.estatus, emb.estatus) }}
+                            </span>
+                        </td>
+                        <td>
+                            <a href="{{ url_for('detalle_embarque', id_embarque=emb.id_embarque) }}"
+                               class="btn btn-sm btn-outline-secondary">
+                                <i class="bi bi-eye"></i>
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {# Paginación #}
+        {% if paginacion.pages > 1 %}
+        <nav aria-label="Paginación embarques" class="mt-3">
+            <ul class="pagination pagination-sm justify-content-center">
+                {% if paginacion.has_prev %}
+                <li class="page-item">
+                    <a class="page-link"
+                       href="{{ url_for('listar_embarques',
+                           pagina=paginacion.prev_num,
+                           fecha_desde=request.args.get('fecha_desde') or '',
+                           fecha_hasta=request.args.get('fecha_hasta') or '',
+                           id_producto=request.args.get('id_producto') or '',
+                           tipo_unidad=request.args.get('tipo_unidad') or '',
+                           texto_libre=request.args.get('texto_libre') or '') }}">
+                        Anterior
+                    </a>
+                </li>
+                {% endif %}
+                <li class="page-item disabled">
+                    <span class="page-link">{{ paginacion.page }} / {{ paginacion.pages }}</span>
+                </li>
+                {% if paginacion.has_next %}
+                <li class="page-item">
+                    <a class="page-link"
+                       href="{{ url_for('listar_embarques',
+                           pagina=paginacion.next_num,
+                           fecha_desde=request.args.get('fecha_desde') or '',
+                           fecha_hasta=request.args.get('fecha_hasta') or '',
+                           id_producto=request.args.get('id_producto') or '',
+                           tipo_unidad=request.args.get('tipo_unidad') or '',
+                           texto_libre=request.args.get('texto_libre') or '') }}">
+                        Siguiente
+                    </a>
+                </li>
+                {% endif %}
+            </ul>
+        </nav>
+        {% endif %}
+        {% endif %}
+    </div>
+</div>
+
+{# Botones de acción inferiores #}
+<div class="d-flex gap-2 mt-4">
+    {% if not _is_guest() %}
+    <a href="{{ url_for('nuevo_embarque') }}" class="btn btn-primary">
+        <i class="bi bi-plus-circle me-1"></i>Nuevo embarque <i class="bi bi-arrow-up-right ms-1"></i>
+    </a>
+    {% endif %}
+    <a href="{{ url_for('exportar_embarques',
+            fecha_desde=request.args.get('fecha_desde') or '',
+            fecha_hasta=request.args.get('fecha_hasta') or '',
+            id_producto=request.args.get('id_producto') or '',
+            tipo_unidad=request.args.get('tipo_unidad') or '',
+            texto_libre=request.args.get('texto_libre') or '') }}"
+       class="btn btn-outline-secondary">
+        <i class="bi bi-file-earmark-excel me-1"></i>Exportar a Excel
+    </a>
+</div>
+{% endblock %}

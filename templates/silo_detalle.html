@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+
+{% block title %}Detalle Silo {{ silo.nombre_silo }}{% endblock %}
+
+{% block content %}
+{% set total_galones = namespace(total=0) %}
+{% for item in inventario %}
+    {% set total_galones.total = total_galones.total + item.galones|float %}
+{% endfor %}
+{% set total_galones = total_galones.total %}
+{% set porcentaje_ocupacion = (total_galones / silo.capacidad_gal|float * 100) if silo.capacidad_gal > 0 else 0 %}
+
+<div class="row mb-4">
+    <div class="col-md-12">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="{{ url_for('index') }}">Dashboard</a></li>
+                <li class="breadcrumb-item active">Silo {{ silo.nombre_silo }}</li>
+            </ol>
+        </nav>
+        <div class="d-flex justify-content-between align-items-center">
+            <h2>Silo: {{ silo.nombre_silo }}</h2>
+            <span class="badge {{ 'bg-info' if silo.tipo_producto == 'jugo' else 'bg-success' }} fs-5">
+                {{ silo.tipo_producto|capitalize }}
+            </span>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Resumen del Silo -->
+    <div class="col-md-4 mb-4">
+        <div class="card shadow h-100">
+            <div class="card-header">Información General</div>
+            <div class="card-body">
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>Capacidad Galones:</span>
+                        <strong>{{ "{:,.2f}".format(silo.capacidad_gal) }}</strong>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>Capacidad Barriles:</span>
+                        <strong>{{ "{:,.2f}".format(silo.capacidad_barriles) }}</strong>
+                    </li>
+                    <li class="list-group-item">
+                        <div class="d-flex justify-content-between mb-1">
+                            <span>Inventario Actual:</span>
+                            <strong>{{ "{:,.2f}".format(total_galones) }} gal</strong>
+                        </div>
+                        <div class="progress" style="height: 20px;">
+                            <div class="progress-bar {{ 'bg-danger' if porcentaje_ocupacion > 90 else 'bg-primary' }}" 
+                                 role="progressbar" 
+                                 style="width: 0%"
+                                 data-progress="{{ porcentaje_ocupacion }}"
+                                 aria-valuenow="{{ porcentaje_ocupacion }}" 
+                                 aria-valuemin="0" 
+                                 aria-valuemax="100">
+                                {{ "%.1f"|format(porcentaje_ocupacion) }}%
+                            </div>
+                        </div>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>Estado:</span>
+                        <span class="text-success">{{ silo.estado|capitalize }}</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- Inventario Actual (Lotes) -->
+    <div class="col-md-8 mb-4">
+        <div class="card shadow h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Inventario Actual (Lotes LIFO)</span>
+                <i class="bi bi-info-circle" data-bs-toggle="tooltip" title="Los lotes se despachan en orden LIFO: posición 1 es el más reciente"></i>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-striped align-middle">
+                        <thead>
+                            <tr>
+                                <th>Posición</th>
+                                <th>Lote</th>
+                                <th>Galones</th>
+                                <th>% del Silo</th>
+                                <th>Brix</th>
+                                <th>Estado</th>
+                                <th>Cliente</th>
+                                <th>Fecha Reg.</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in inventario %}
+                            {% set porcentaje_lote = (item.galones|float / silo.capacidad_gal|float * 100) if silo.capacidad_gal > 0 else 0 %}
+                            <tr>
+                                <td><span class="badge bg-secondary">P{{ "%03d"|format(item.posicion) }}</span></td>
+                                <td><strong>{{ item.lote.codigo_lote }}</strong></td>
+                                <td>{{ "{:,.2f}".format(item.galones) }}</td>
+                                <td>
+                                    <div class="d-flex align-items-center">
+                                        <div class="progress flex-grow-1 me-2" style="height: 8px;">
+                                            <div class="progress-bar {{ 'bg-danger' if porcentaje_lote > 30 else 'bg-primary' }}" 
+                                                 role="progressbar" 
+                                                 style="width: 0%"
+                                                 data-progress="{{ porcentaje_lote }}">
+                                            </div>
+                                        </div>
+                                        <small>{{ "%.1f"|format(porcentaje_lote) }}%</small>
+                                    </div>
+                                </td>
+                                <td>{{ item.lote.brix }}</td>
+                                <td>
+                                    {% set estado = item.lote.estado.nombre_estado %}
+                                    {% if 'Liberado' in estado %}
+                                        <span class="badge bg-success text-white">{{ estado }}</span>
+                                    {% elif 'Reproceso' in estado or 'No apto' in estado %}
+                                        <span class="badge bg-danger text-white">{{ estado }}</span>
+                                    {% elif 'Pendiente' in estado %}
+                                        <span class="badge bg-warning text-dark">{{ estado }}</span>
+                                    {% else %}
+                                        <span class="badge bg-info text-white">{{ estado }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if item.lote.cliente %}
+                                        {{ item.lote.cliente.nombre_cliente }}
+                                    {% elif item.lote.cliente_manual %}
+                                        {{ item.lote.cliente_manual }}
+                                    {% else %}
+                                        <span class="text-muted">N/A</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ item.fecha_registro.strftime('%d/%m/%Y %H:%M') }}</td>
+                                <td>
+                                    {% if current_user.rol != 'invitado' and current_user.usuario != 'invitado' %}
+                                    <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#modalEstado{{ item.id_inventario }}">
+                                        <i class="bi bi-pencil"></i> Cambiar Estado
+                                    </button>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            
+                            {% if current_user.rol != 'invitado' and current_user.usuario != 'invitado' %}
+                            <!-- Modal para cambiar estado -->
+                            <div class="modal fade" id="modalEstado{{ item.id_inventario }}" tabindex="-1" aria-labelledby="modalEstadoLabel{{ item.id_inventario }}" aria-hidden="true">
+                                <div class="modal-dialog">
+                                    <div class="modal-content">
+                                        <form method="POST" action="{{ url_for('cambiar_estado_lote', id_inventario=item.id_inventario) }}">
+                                            <div class="modal-header">
+                                                <h5 class="modal-title" id="modalEstadoLabel{{ item.id_inventario }}">Cambiar Estado del Lote</h5>
+                                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                            </div>
+                                            <div class="modal-body">
+                                                <div class="mb-3">
+                                                    <label class="form-label">Lote:</label>
+                                                    <input type="text" class="form-control" value="{{ item.lote.codigo_lote }}" disabled>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label">Estado Actual:</label>
+                                                    <span class="badge {{ 'bg-success' if 'Liberado' in item.lote.estado.nombre_estado else 'bg-danger' if 'Reproceso' in item.lote.estado.nombre_estado or 'No apto' in item.lote.estado.nombre_estado else 'bg-warning text-dark' if 'Pendiente' in item.lote.estado.nombre_estado else 'bg-info' }}">
+                                                        {{ item.lote.estado.nombre_estado }}
+                                                    </span>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label for="nuevo_estado{{ item.id_inventario }}" class="form-label">Nuevo Estado:</label>
+                                                    <select class="form-select" id="nuevo_estado{{ item.id_inventario }}" name="nuevo_estado" required>
+                                                        {% for estado in estados %}
+                                                        <option value="{{ estado.id_estado }}" {% if estado.id_estado == item.lote.id_estado %}selected{% endif %}>
+                                                            {{ estado.nombre_estado }}
+                                                        </option>
+                                                        {% endfor %}
+                                                    </select>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label for="id_cliente{{ item.id_inventario }}" class="form-label">Cliente (opcional)</label>
+                                                    <select class="form-select mb-2" id="id_cliente{{ item.id_inventario }}" name="id_cliente">
+                                                        <option value="">Sin cambios</option>
+                                                        <option value="__none__">Quitar cliente</option>
+                                                        {% for cliente in clientes %}
+                                                        <option value="{{ cliente.id_cliente }}">{{ cliente.nombre_cliente }}</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                    <div class="input-group">
+                                                        <span class="input-group-text">O escriba:</span>
+                                                        <input type="text" class="form-control" id="cliente_manual{{ item.id_inventario }}" name="cliente_manual" placeholder="Nombre del cliente (opcional)">
+                                                    </div>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label for="observaciones{{ item.id_inventario }}" class="form-label">Observaciones (opcional):</label>
+                                                    <textarea class="form-control" id="observaciones{{ item.id_inventario }}" name="observaciones" rows="2"></textarea>
+                                                </div>
+                                            </div>
+                                            <div class="modal-footer">
+                                                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                                                <button type="submit" class="btn btn-primary">Guardar Cambio</button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
+                            
+                            {% else %}
+                            <tr>
+                                <td colspan="9" class="text-center text-muted">Silo vacío</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                        {% if inventario %}
+                        <tfoot class="table-light">
+                            <tr>
+                                <th colspan="2" class="text-end">Total:</th>
+                                <th colspan="7">{{ "{:,.2f}".format(inventario|sum(attribute='galones')) }} gal ({{ "%.1f"|format(porcentaje_ocupacion) }}% del silo)</th>
+                            </tr>
+                        </tfoot>
+                        {% endif %}
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.querySelectorAll('[data-progress]').forEach((el) => {
+        const raw = el.getAttribute('data-progress');
+        const value = Number(raw);
+        const safe = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
+        el.style.width = `${safe}%`;
+        el.setAttribute('aria-valuenow', String(safe));
+    });
+</script>
+{% endblock %}

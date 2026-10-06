@@ -1,0 +1,44 @@
+{# ==========================================================================
+   Placeholder: Cuadre de galonaje (Fase 5).
+   La conversión kg → galones depende de la densidad por brix y no está
+   confirmada por Calidad. Esta pantalla se implementará en una fase posterior.
+   ========================================================================== #}
+{% extends "base.html" %}
+{% block title %}Cuadre de galonaje{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-xl-10 col-lg-11">
+
+        <div class="card shadow mb-4">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <i class="bi bi-droplet me-2"></i>Cuadre de galonaje
+                </h5>
+                <a href="{{ url_for('listar_embarques') }}" class="btn btn-sm btn-outline-light">
+                    <i class="bi bi-arrow-left me-1"></i>Volver al listado
+                </a>
+            </div>
+        </div>
+
+        <div class="card shadow">
+            <div class="card-body p-5 text-center">
+                <i class="bi bi-tools text-primary" style="font-size: 4rem;"></i>
+                <h4 class="mt-3">Cuadre de galonaje: próximamente</h4>
+                <p class="text-muted mt-2" style="max-width: 640px; margin: 0 auto;">
+                    Esta pantalla permitirá conciliar los galones embarcados contra la producción y los lotes cargados.
+                    La fórmula de conversión (kg → galones) depende de la densidad por brix para cada producto y aún
+                    debe ser confirmada por Calidad. Mientras tanto, puedes consultar los detalles de cada embarque
+                    desde el listado.
+                </p>
+                <div class="mt-4">
+                    <a href="{{ url_for('listar_embarques') }}" class="btn btn-primary">
+                        <i class="bi bi-list me-1"></i>Ir al listado de embarques
+                    </a>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+{% endblock %}

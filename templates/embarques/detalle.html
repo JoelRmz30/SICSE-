@@ -1,0 +1,386 @@
+{# ==========================================================================
+   Vista de detalle completo de un embarque.
+   Secciones: Plan, Carga (lotes tabla), Unidad y transporte, Detalle por grupo
+   (sellos agrupados, lavadero/check list/temperatura), Tiempos.
+   Botones: editar (capturista/admin), cancelar (solo admin), volver.
+   ========================================================================== #}
+{% extends "base.html" %}
+{% block title %}Detalle de embarque {{ emb.num_cita }}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-xl-10 col-lg-11">
+
+        {# Encabezado #}
+        <div class="card shadow mb-4">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div>
+                    <h5 class="mb-0">
+                        <i class="bi bi-file-earmark-text me-2"></i>Detalle de embarque
+                        <span class="ms-2">{{ emb.num_cita }}</span>
+                    </h5>
+                    <small class="opacity-75">
+                        Creado el {{ emb.creado_en.strftime('%d/%m/%Y %H:%M') if emb.creado_en else '-' }}
+                        {% if emb.capturista %}por {{ emb.capturista.nombre_usuario }}{% endif %}
+                        {% if emb.actualizado_en %} · Actualizado el {{ emb.actualizado_en.strftime('%d/%m/%Y %H:%M') }}{% endif %}
+                    </small>
+                </div>
+                <div>
+                    {% set estilos = {
+                        'programado': 'bg-secondary',
+                        'en_planta': 'bg-primary text-white',
+                        'cargado': 'bg-success',
+                        'cancelado': 'bg-danger'
+                    } %}
+                    {% set est_labels = {
+                        'programado': 'Programado',
+                        'en_planta': 'En planta',
+                        'cargado': 'Cargado',
+                        'cancelado': 'Cancelado'
+                    } %}
+                    <span class="badge fs-6 {{ estilos.get(emb.estatus, 'bg-secondary') }} me-2">
+                        {{ est_labels.get(emb.estatus, emb.estatus) }}
+                    </span>
+                    {% if current_user.rol != 'invitado' %}
+                    <a href="{{ url_for('editar_embarque', id_embarque=emb.id_embarque) }}"
+                       class="btn btn-sm btn-outline-light">
+                        <i class="bi bi-pencil me-1"></i>Editar
+                    </a>
+                    {% endif %}
+                    {% if current_user.rol == 'administrador' and emb.estatus != 'cancelado' %}
+                    <form method="POST" action="{{ url_for('cancelar_embarque', id_embarque=emb.id_embarque) }}"
+                          class="d-inline" onsubmit="return confirm('¿Cancelar este embarque? No se borrará.');">
+                        <button type="submit" class="btn btn-sm btn-outline-light ms-1">
+                            <i class="bi bi-x-circle me-1"></i>Cancelar
+                        </button>
+                    </form>
+                    {% endif %}
+                    <a href="{{ url_for('listar_embarques') }}" class="btn btn-sm btn-outline-light ms-1">
+                        <i class="bi bi-arrow-left me-1"></i>Volver
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="row g-3 mb-4">
+            {# Campos calculados (no se guardan) #}
+            <div class="col-md-4">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body">
+                        <div class="small text-muted">Semana (ISO)</div>
+                        <div class="fs-5 fw-semibold">
+                            {% if emb.fecha_embarque %}
+                                S{{ emb.fecha_embarque.isocalendar()[1] }}
+                            {% else %}-{% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body">
+                        <div class="small text-muted">Mes</div>
+                        <div class="fs-5 fw-semibold">
+                            {% if emb.fecha_embarque %}
+                                {% set m = emb.fecha_embarque.month %}
+                                {{ ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'][m-1] }}
+                            {% else %}-{% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body">
+                        <div class="small text-muted">Cantidad total embarcada</div>
+                        <div class="fs-5 fw-semibold">
+                            {{ '{:,.2f}'.format(emb.cantidad_total) }}
+                            {% if emb.producto and emb.producto.unidad_medida %}{{ emb.producto.unidad_medida }}{% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# ================= PLAN #}
+        <div class="card shadow mb-4">
+            <div class="card-header bg-light fw-semibold">
+                <i class="bi bi-calendar-event me-1"></i>Plan
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <div class="small text-muted">Fecha de embarque</div>
+                        <div class="fw-semibold">{{ emb.fecha_embarque.strftime('%d/%m/%Y') if emb.fecha_embarque else '-' }}</div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="small text-muted">Turno</div>
+                        <div class="fw-semibold">{{ emb.turno if emb.turno else '-' }}</div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="small text-muted">Número de orden</div>
+                        <div class="fw-semibold">{{ emb.num_orden or '-' }}</div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="small text-muted">Ticket / Packing</div>
+                        <div class="fw-semibold">
+                            {{ emb.ticket or '-' }} / {{ emb.packing or '-' }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# ================= CARGA (producto, cliente, lotes) #}
+        <div class="card shadow mb-4">
+            <div class="card-header bg-light fw-semibold">
+                <i class="bi bi-box-seam me-1"></i>Carga
+            </div>
+            <div class="card-body">
+                <div class="row g-3 mb-3">
+                    <div class="col-md-6">
+                        <div class="small text-muted">Producto</div>
+                        <div class="fw-semibold">
+                            {% if emb.producto %}
+                                {{ emb.producto.descripcion }}
+                                {% if emb.producto.item %}<span class="text-muted small">({{ emb.producto.item }})</span>{% endif %}
+                                {% if emb.producto.variedad %}<span class="text-muted small"> · {{ emb.producto.variedad }}</span>{% endif %}
+                                <span class="badge bg-light text-dark ms-1">{{ emb.producto.tipo or '' }}</span>
+                            {% else %}-{% endif %}
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="small text-muted">Cliente / destino</div>
+                        <div class="fw-semibold">
+                            {% if emb.cliente %}
+                                {% if emb.cliente.codigo %}[{{ emb.cliente.codigo }}] · {% endif %}{{ emb.cliente.nombre_cliente }}
+                            {% else %}-{% endif %}
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="small text-muted">Tipo de unidad</div>
+                        <div class="fw-semibold">
+                            {% set tu = {
+                                'pipa_jumbo':'Pipa jumbo','pipa_chica':'Pipa chica','isotanque':'Isotanque',
+                                'flexitanque':'Flexitanque','caja_refrigerada':'Caja refrigerada',
+                                'caja_seca':'Caja seca','trailer':'Tráiler','tambores':'Tambores'
+                            } %}
+                            {{ tu.get(emb.tipo_unidad, emb.tipo_unidad or '-') }}
+                            <span class="text-muted small">(grupo: {{ TIPO_UNIDAD_GRUPO.get(emb.tipo_unidad, '-') }})</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm table-bordered align-middle mb-0">
+                        <thead class="table-light small text-muted">
+                            <tr>
+                                <th style="width:5%">#</th>
+                                <th style="width:25%">Código lote</th>
+                                <th style="width:20%">Fecha lote</th>
+                                <th style="width:15%">Brix</th>
+                                <th style="width:15%">Relación</th>
+                                <th style="width:20%" class="text-end">Cantidad</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for el in emb.lotes %}
+                            <tr>
+                                <td>{{ loop.index }}</td>
+                                <td>
+                                    {% if el.lote %}
+                                        <code>{{ el.lote.codigo_lote }}</code>
+                                        {% if el.lote.cliente %}
+                                            <div class="small text-muted">
+                                                {% if el.lote.cliente.codigo %}[{{ el.lote.cliente.codigo }}] {% endif %}
+                                                {{ el.lote.cliente.nombre_cliente }}
+                                            </div>
+                                        {% endif %}
+                                    {% else %}
+                                        <span class="text-warning">Lote no disponible</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ el.lote.fecha_lote.strftime('%d/%m/%Y') if el.lote and el.lote.fecha_lote else '-' }}</td>
+                                <td>{{ '{:,.2f}'.format(el.lote.brix) if el.lote and el.lote.brix else '-' }}</td>
+                                <td>{{ '{:,.2f}'.format(el.lote.relacion) if el.lote and el.lote.relacion else '-' }}</td>
+                                <td class="text-end">
+                                    {{ '{:,.2f}'.format(el.cantidad) }}
+                                    {% if emb.producto and emb.producto.unidad_medida %}{{ emb.producto.unidad_medida }}{% endif %}
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="6" class="text-center text-muted py-3">Sin lotes registrados.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                        <tfoot>
+                            <tr class="fw-semibold">
+                                <td colspan="5" class="text-end pe-3">Total:</td>
+                                <td class="text-end">
+                                    {{ '{:,.2f}'.format(emb.cantidad_total) }}
+                                    {% if emb.producto and emb.producto.unidad_medida %}{{ emb.producto.unidad_medida }}{% endif %}
+                                </td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        {# ================= UNIDAD Y TRANSPORTE #}
+        <div class="card shadow mb-4">
+            <div class="card-header bg-light fw-semibold">
+                <i class="bi bi-truck me-1"></i>Unidad y transporte
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <div class="small text-muted">Transportista</div>
+                        <div class="fw-semibold">{{ emb.transportista.nombre if emb.transportista else '-' }}</div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="small text-muted">Operador</div>
+                        <div class="fw-semibold">{{ emb.operador.nombre if emb.operador else '-' }}</div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="small text-muted">Facilitador</div>
+                        <div class="fw-semibold">{{ emb.facilitador.nombre if emb.facilitador else '-' }}</div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="small text-muted">Tractor</div>
+                        <div class="fw-semibold">{{ emb.tractor.placa if emb.tractor else '-' }}</div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="small text-muted">Remolque</div>
+                        <div class="fw-semibold">{{ emb.remolque.placa if emb.remolque else '-' }}</div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="small text-muted">Temperatura (°C)</div>
+                        <div class="fw-semibold">{{ '{:,.1f}'.format(emb.temperatura_c) if emb.temperatura_c is not none else '-' }}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# ================= DETALLE POR GRUPO #}
+        <div class="card shadow mb-4">
+            <div class="card-header bg-light fw-semibold">
+                <i class="bi bi-list-check me-1"></i>Detalle
+            </div>
+            <div class="card-body">
+                {% set grupo = TIPO_UNIDAD_GRUPO.get(emb.tipo_unidad) %}
+                {% if grupo == 'pipa' %}
+                <div class="row g-3 mb-3">
+                    <div class="col-md-6">
+                        <div class="small text-muted">Lavadero</div>
+                        <div class="fw-semibold">{{ emb.detalle.lavadero.nombre if emb.detalle and emb.detalle.lavadero else '-' }}</div>
+                    </div>
+                </div>
+                {% elif grupo == 'tambor' %}
+                <div class="row g-3 mb-3">
+                    <div class="col-md-6">
+                        <div class="small text-muted">Lote de tambor</div>
+                        <div class="fw-semibold">{{ emb.detalle.lote_tambor if emb.detalle and emb.detalle.lote_tambor else '-' }}</div>
+                    </div>
+                    <div class="col-md-6 d-flex align-items-end">
+                        <div class="small text-muted">Check list aprobado:</div>
+                        <span class="badge ms-2 {{ 'bg-success' if emb.detalle and emb.detalle.check_list else 'bg-secondary' }}">
+                            {{ 'Sí' if emb.detalle and emb.detalle.check_list else 'No' }}
+                        </span>
+                    </div>
+                </div>
+                {% else %}
+                <div class="text-muted small mb-3">Sin campos de detalle adicionales para este grupo.</div>
+                {% endif %}
+
+                <h6 class="small fw-semibold text-muted border-top pt-3 mb-2">Sellos</h6>
+                {% set sello_labels = {
+                    'lavado':'Sellos de lavado',
+                    'valvula':'Sello de válvula',
+                    'escotilla':'Sellos de escotilla',
+                    'puerta_trasera':'Sellos de puertas traseras',
+                } %}
+                {% if sellos_por_tipo %}
+                <div class="row g-3">
+                    {% for tipo, nums in sellos_por_tipo.items() %}
+                    <div class="col-md-6">
+                        <div class="small text-muted">{{ sello_labels.get(tipo, tipo) }}</div>
+                        <div>
+                            {% for n in nums %}
+                            <span class="badge bg-light text-dark border me-1 mb-1">{{ n }}</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="text-muted small">Sin sellos registrados.</div>
+                {% endif %}
+            </div>
+        </div>
+
+        {# ================= TIEMPOS #}
+        <div class="card shadow mb-4">
+            <div class="card-header bg-light fw-semibold">
+                <i class="bi bi-clock-history me-1"></i>Tiempos
+            </div>
+            <div class="card-body">
+                {% set tiempos = emb.tiempos %}
+                {% if tiempos %}
+                {% set orden_ok, orden_msg = tiempos.tiempos_ordenados() %}
+                <div class="row g-3 mb-3">
+                    {% set tdefs = [
+                        ('llegada','Llegada', tiempos.llegada),
+                        ('entrada','Entrada', tiempos.entrada),
+                        ('pesado_inicial','Pesado inicial', tiempos.pesado_inicial),
+                        ('pesaje_salida','Pesaje salida', tiempos.pesaje_salida),
+                        ('documentacion','Documentación', tiempos.documentacion),
+                        ('salida','Salida', tiempos.salida),
+                    ] %}
+                    {% for _k, lab, val in tdefs %}
+                    <div class="col-md-4">
+                        <div class="small text-muted">{{ lab }}</div>
+                        <div class="fw-semibold">{{ val.strftime('%d/%m/%Y %H:%M') if val else '-' }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <div class="small text-muted">Tiempo en planta</div>
+                        <div class="fw-semibold">{{ formatear_timedelta(tiempos.tiempo_en_planta) }}</div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="small text-muted">Tiempo documental</div>
+                        <div class="fw-semibold">{{ formatear_timedelta(tiempos.tiempo_documental) }}</div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="small text-muted">Orden de tiempos</div>
+                        <div class="fw-semibold">
+                            {% if orden_ok %}
+                            <span class="badge bg-success">Correcto</span>
+                            {% else %}
+                            <span class="badge bg-danger" title="{{ orden_msg }}">Incorrecto</span>
+                            <div class="small text-danger mt-1">{{ orden_msg }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% else %}
+                <div class="text-muted small">Sin tiempos registrados.</div>
+                {% endif %}
+            </div>
+        </div>
+
+        {# ================= OBSERVACIONES #}
+        {% if emb.observaciones %}
+        <div class="card shadow mb-4">
+            <div class="card-header bg-light fw-semibold">
+                <i class="bi bi-chat-left-text me-1"></i>Observaciones
+            </div>
+            <div class="card-body">
+                <p class="mb-0 whitespace-pre-wrap">{{ emb.observaciones }}</p>
+            </div>
+        </div>
+        {% endif %}
+
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+
+{% block title %}Registro de Entrada{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card shadow">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0"><i class="bi bi-plus-circle"></i> Registrar Entrada de Producto</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="id_silo" class="form-label">Silo Destino</label>
+                            <select class="form-select" id="id_silo" name="id_silo" required>
+                                <option value="" selected disabled>Seleccione un silo...</option>
+                                {% for silo in silos %}
+                                <option value="{{ silo.id_silo }}" data-tipo="{{ silo.tipo_producto or '' }}" data-permitido="{{ silo.tipo_permitido or '' }}">{{ silo.nombre_silo }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="tipo_producto" class="form-label">Tipo de Producto</label>
+                            <select class="form-select" id="tipo_producto" name="tipo_producto" required>
+                                <option value="" selected disabled>Seleccione tipo...</option>
+                                <option value="jugo">Jugo</option>
+                                <option value="concentrado">Concentrado</option>
+                                <option value="aceite">Aceite</option>
+                                <option value="nfc">NFC</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="codigo_lote" class="form-label">Código de Lote</label>
+                            <input type="text" class="form-control" id="codigo_lote" name="codigo_lote" placeholder="Ej: 005-20251210-044497" required>
+                            <div class="form-text">Formato: 005-20251210-044497 (planta-fecha-lote)</div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="fecha_lote" class="form-label">Fecha del Lote</label>
+                            <input type="date" class="form-control" id="fecha_lote" name="fecha_lote" value="{{ today }}" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="galones" class="form-label">Galones</label>
+                            <input type="number" step="0.01" class="form-control" id="galones" name="galones" required>
+                        </div>
+                    </div>
+
+                    <hr>
+                    <h6>Parámetros de Calidad</h6>
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label for="brix" class="form-label">Brix</label>
+                            <input type="number" step="0.01" class="form-control" id="brix" name="brix" required>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label for="relacion" class="form-label">Relación</label>
+                            <input type="number" step="0.01" class="form-control" id="relacion" name="relacion" required>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label for="pulpa" class="form-label">% Pulpa</label>
+                            <input type="number" step="0.01" class="form-control" id="pulpa" name="pulpa" required>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="id_estado" class="form-label">Estado del Producto</label>
+                            <select class="form-select" id="id_estado" name="id_estado" required>
+                                {% for estado in estados %}
+                                <option value="{{ estado.id_estado }}">{{ estado.nombre_estado }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="id_cliente" class="form-label d-flex justify-content-between align-items-center">
+                                Cliente
+                            </label>
+                            <select class="form-select mb-2" id="id_cliente" name="id_cliente">
+                                <option value="">Seleccione o escriba un cliente...</option>
+                                {% for cliente in clientes %}
+                                <option value="{{ cliente.id_cliente }}">{{ cliente.nombre_cliente }}</option>
+                                {% endfor %}
+                            </select>
+                            <div class="input-group">
+                                <span class="input-group-text">O escriba:</span>
+                                <input type="text" class="form-control" id="cliente_manual" name="cliente_manual" placeholder="Nombre del cliente (opcional)">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="observaciones" class="form-label">Observaciones</label>
+                        <textarea class="form-control" id="observaciones" name="observaciones" rows="2"></textarea>
+                    </div>
+
+                    <div class="d-flex justify-content-end gap-2">
+                        <a href="{{ url_for('index') }}" class="btn btn-outline-secondary">Cancelar</a>
+                        <button type="submit" class="btn btn-primary">Guardar Entrada</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.getElementById('id_silo').addEventListener('change', function() {
+    const selectedOption = this.options[this.selectedIndex];
+    const siloTipo = selectedOption.getAttribute('data-tipo');
+    const siloPermitido = selectedOption.getAttribute('data-permitido');
+    const tipoProductoSelect = document.getElementById('tipo_producto');
+    const tipoLabel = (v) => {
+        if (v === 'jugo') return 'Jugo';
+        if (v === 'concentrado') return 'Concentrado';
+        if (v === 'aceite') return 'Aceite';
+        if (v === 'nfc') return 'NFC';
+        return v;
+    };
+    
+    if (siloTipo) {
+        // El silo ya tiene un tipo, auto-seleccionarlo y NO deshabilitar (para que envíe el valor)
+        tipoProductoSelect.value = siloTipo;
+        tipoProductoSelect.disabled = false;
+        // Ocultar las otras opciones para que no se seleccionen
+        for (let option of tipoProductoSelect.options) {
+            if (option.value !== siloTipo && option.value !== '') {
+                option.hidden = true;
+            } else {
+                option.hidden = false;
+            }
+        }
+        const tipoNombre = tipoLabel(siloTipo);
+        const alertDiv = document.createElement('div');
+        alertDiv.id = 'silo-tipo-alert';
+        if (siloPermitido && siloPermitido === siloTipo) {
+            alertDiv.className = 'alert alert-warning mt-2';
+            alertDiv.innerHTML = `<i class="bi bi-shield-lock"></i> Este silo está destinado a <strong>${tipoNombre}</strong>.`;
+        } else {
+            alertDiv.className = 'alert alert-info mt-2';
+            alertDiv.innerHTML = `<i class="bi bi-info-circle"></i> Este silo ya tiene <strong>${tipoNombre}</strong>. Puedes agregar más lotes del mismo producto.`;
+        }
+        
+        const existingAlert = document.getElementById('silo-tipo-alert');
+        if (existingAlert) existingAlert.remove();
+        this.parentNode.appendChild(alertDiv);
+    } else if (siloPermitido) {
+        tipoProductoSelect.value = siloPermitido;
+        tipoProductoSelect.disabled = false;
+        for (let option of tipoProductoSelect.options) {
+            if (option.value !== siloPermitido && option.value !== '') {
+                option.hidden = true;
+            } else {
+                option.hidden = false;
+            }
+        }
+        const tipoNombre = tipoLabel(siloPermitido);
+        const alertDiv = document.createElement('div');
+        alertDiv.className = 'alert alert-warning mt-2';
+        alertDiv.id = 'silo-tipo-alert';
+        alertDiv.innerHTML = `<i class="bi bi-shield-lock"></i> Este silo está destinado a <strong>${tipoNombre}</strong>.`;
+        const existingAlert = document.getElementById('silo-tipo-alert');
+        if (existingAlert) existingAlert.remove();
+        this.parentNode.appendChild(alertDiv);
+    } else {
+        // Silo sin tipo, habilitar selección completa
+        tipoProductoSelect.disabled = false;
+        tipoProductoSelect.value = '';
+        // Mostrar todas las opciones
+        for (let option of tipoProductoSelect.options) {
+            option.hidden = false;
+        }
+        const existingAlert = document.getElementById('silo-tipo-alert');
+        if (existingAlert) existingAlert.remove();
+    }
+});
+
+document.getElementById('codigo_lote').addEventListener('input', function() {
+    const loteInput = this;
+    const loteValue = loteInput.value;
+    const regex = /^\d{3}-\d{8}-\d{6}$/;
+    const alertDiv = document.getElementById('lote-alert');
+    
+    if (loteValue && !regex.test(loteValue)) {
+        loteInput.classList.add('is-invalid');
+        loteInput.classList.remove('is-valid');
+        
+        if (!alertDiv) {
+            const newAlert = document.createElement('div');
+            newAlert.className = 'alert alert-danger mt-2';
+            newAlert.id = 'lote-alert';
+            newAlert.innerHTML = '<i class="bi bi-exclamation-triangle"></i> Formato incorrecto. Usa: 005-20251210-044497';
+            loteInput.parentNode.appendChild(newAlert);
+        }
+    } else {
+        loteInput.classList.remove('is-invalid');
+        if (loteValue) {
+            loteInput.classList.add('is-valid');
+        } else {
+            loteInput.classList.remove('is-valid');
+        }
+        
+        if (alertDiv) {
+            alertDiv.remove();
+        }
+    }
+});
+
+document.querySelector('form').addEventListener('submit', function(e) {
+    const loteInput = document.getElementById('codigo_lote');
+    const loteValue = loteInput.value;
+    const regex = /^\d{3}-\d{8}-\d{6}$/;
+    
+    if (!regex.test(loteValue)) {
+        e.preventDefault();
+        loteInput.classList.add('is-invalid');
+        const alertDiv = document.createElement('div');
+        alertDiv.className = 'alert alert-danger mt-2';
+        alertDiv.id = 'lote-alert';
+        alertDiv.innerHTML = '<i class="bi bi-exclamation-triangle"></i> Formato de lote incorrecto. Usa: 005-20251210-044497';
+        
+        const existingAlert = document.getElementById('lote-alert');
+        if (existingAlert) existingAlert.remove();
+        loteInput.parentNode.appendChild(alertDiv);
+        
+        loteInput.focus();
+    }
+});
+</script>
+{% endblock %}

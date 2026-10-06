@@ -1,0 +1,301 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <h2 class="mb-4">Dashboard Principal</h2>
+    </div>
+</div>
+
+<!-- Tarjetas de Resumen -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card bg-primary text-white h-100 shadow">
+            <div class="card-body text-center">
+                <h5>Inventario Total</h5>
+                <h3>{{ "{:,.2f}".format(stats.total_galones) }} <small>gal</small></h3>
+                <i class="bi bi-droplet-fill fs-1 opacity-50"></i>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-success text-white h-100 shadow">
+            <div class="card-body text-center">
+                <h5>% Ocupación General</h5>
+                <h3>{{ stats.porcentaje_total }}%</h3>
+                <div class="progress mt-2" style="height: 10px;">
+                    <div class="progress-bar bg-light" role="progressbar" style="width: 0%" data-progress="{{ stats.porcentaje_total }}"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-info text-white h-100 shadow">
+            <div class="card-body text-center">
+                <h5>Silos Ocupados</h5>
+                <h3>{{ stats.silos_ocupados }} / {{ stats.silos_totales }}</h3>
+                <i class="bi bi-layers-fill fs-1 opacity-50"></i>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card bg-warning text-dark h-100 shadow">
+            <div class="card-body text-center">
+                <h5>Alertas / Pendientes</h5>
+                <h3>0</h3>
+                <i class="bi bi-exclamation-triangle-fill fs-1 opacity-50"></i>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Tabla de Silos y Estadísticas -->
+<div class="row">
+    <div class="col-md-8">
+        <div class="card shadow mb-4">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">Estado de Silos</h5>
+                <div>
+                    {% if current_user.rol != 'invitado' and current_user.usuario != 'invitado' %}
+                    <a href="{{ url_for('registrar_entrada') }}" class="btn btn-sm btn-primary"><i class="bi bi-plus-circle"></i> Entrada</a>
+                    <a href="{{ url_for('registrar_salida') }}" class="btn btn-sm btn-outline-danger"><i class="bi bi-dash-circle"></i> Salida</a>
+                    <a href="{{ url_for('registrar_reproceso') }}" class="btn btn-sm btn-outline-warning"><i class="bi bi-arrow-repeat"></i> Reproceso</a>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Silo</th>
+                                <th>Tipo</th>
+                                <th>Capacidad</th>
+                                <th>Inventario</th>
+                                <th>Ocupación</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for silo in silos %}
+                            {% set row_class = 'silo-aceite-row' if silo.tipo_permitido == 'aceite' else 'silo-nfc-row' if silo.tipo_permitido == 'nfc' else '' %}
+                            <tr class="{{ row_class }}">
+                                <td><strong>{{ silo.nombre }}</strong></td>
+                                <td>
+                                    {% set display_tipo = silo.tipo if (silo.inventario > 0 and silo.tipo) else silo.tipo_permitido %}
+                                    {% if display_tipo %}
+                                        {% set badge_class = 'bg-info' if display_tipo == 'jugo' else 'bg-success' if display_tipo == 'concentrado' else 'bg-warning text-dark' if display_tipo == 'aceite' else 'bg-nfc text-white' if display_tipo == 'nfc' else 'bg-secondary' %}
+                                        <span class="badge {{ badge_class }}">
+                                            {{ display_tipo|upper if display_tipo == 'nfc' else display_tipo|capitalize }}
+                                        </span>
+                                        {% if silo.inventario <= 0 %}
+                                            <small class="text-muted ms-2">(Reservado)</small>
+                                        {% endif %}
+                                    {% else %}
+                                        <span class="text-muted"><em>Vacío</em></span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ "{:,.2f}".format(silo.capacidad) }} gal</td>
+                                <td>{{ "{:,.2f}".format(silo.inventario) }} gal</td>
+                                <td>
+                                    <div class="d-flex align-items-center">
+                                        <div class="progress flex-grow-1 me-2" style="height: 8px;">
+                                            <div class="progress-bar {{ 'bg-danger' if silo.ocupacion > 90 else 'bg-primary' }}" 
+                                                 role="progressbar" style="width: 0%" data-progress="{{ silo.ocupacion }}"></div>
+                                        </div>
+                                        <span>{{ silo.ocupacion }}%</span>
+                                    </div>
+                                </td>
+                                <td>
+                                    <a href="{{ url_for('ver_inventario_silo', id_silo=silo.id_silo) }}" class="btn btn-sm btn-outline-primary">
+                                        <i class="bi bi-eye"></i> Detalle
+                                    </a>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="6" class="text-center text-muted">No hay silos configurados</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Estadísticas por Cliente -->
+    <div class="col-md-4">
+        <div class="card shadow mb-4">
+            <div class="card-header bg-white">
+                <h5 class="card-title mb-0">Inventario por Cliente</h5>
+            </div>
+            <div class="card-body">
+                {% if stats.clientes %}
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Cliente</th>
+                                <th class="text-end">Galones</th>
+                                <th class="text-end">%</th>
+                                <th class="text-end">Detalle</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for cliente in stats.clientes %}
+                            {% set collapse_id = "clienteSilos" ~ loop.index %}
+                            <tr>
+                                <td><strong>{{ cliente.nombre }}</strong></td>
+                                <td class="text-end">{{ "{:,.2f}".format(cliente.galones) }}</td>
+                                <td class="text-end">{{ cliente.porcentaje }}%</td>
+                                <td class="text-end">
+                                    {% if cliente.silos %}
+                                        <button class="btn btn-sm btn-outline-secondary"
+                                                type="button"
+                                                data-bs-toggle="collapse"
+                                                data-bs-target="#{{ collapse_id }}"
+                                                aria-expanded="false"
+                                                aria-controls="{{ collapse_id }}">
+                                            <i class="bi bi-list-ul"></i> Ver silos ({{ cliente.silos|length }})
+                                        </button>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% if cliente.silos %}
+                            <tr class="collapse" id="{{ collapse_id }}">
+                                <td colspan="4" class="bg-light">
+                                    <div class="py-2">
+                                        <div class="fw-semibold mb-2">Silos de: {{ cliente.nombre }}</div>
+                                        <div class="d-flex flex-wrap gap-2">
+                                            {% for s in cliente.silos %}
+                                                <span class="badge text-bg-secondary">
+                                                    {{ s.silo }}: {{ "{:,.2f}".format(s.galones) }} gal
+                                                </span>
+                                            {% endfor %}
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endif %}
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center">No hay inventario registrado</p>
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- Estadísticas por Estado -->
+        <div class="card shadow mb-4">
+            <div class="card-header bg-white">
+                <h5 class="card-title mb-0">Inventario por Estado</h5>
+            </div>
+            <div class="card-body">
+                {% if stats.estados_list %}
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Estado</th>
+                                <th class="text-end">Galones</th>
+                                <th class="text-end">Detalle</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in stats.estados_list %}
+                            {% set collapse_id = "estadoSilos" ~ loop.index %}
+                            <tr class="{{ 'table-active' if request.args.get('estado') == row.estado else '' }}">
+                                <td>
+                                    {% if 'Liberado' in row.estado %}
+                                        <span class="badge bg-success text-white">{{ row.estado }}</span>
+                                    {% elif 'Reproceso' in row.estado or 'No apto' in row.estado %}
+                                        <span class="badge bg-danger text-white">{{ row.estado }}</span>
+                                    {% elif 'Pendiente' in row.estado %}
+                                        <span class="badge bg-warning text-dark">{{ row.estado }}</span>
+                                    {% else %}
+                                        <span class="badge bg-info text-white">{{ row.estado }}</span>
+                                    {% endif %}
+                                </td>
+                                <td class="text-end">{{ "{:,.2f}".format(row.galones) }}</td>
+                                <td class="text-end">
+                                    {% if row.silos %}
+                                        <button class="btn btn-sm btn-outline-secondary"
+                                                type="button"
+                                                data-bs-toggle="collapse"
+                                                data-bs-target="#{{ collapse_id }}"
+                                                aria-expanded="false"
+                                                aria-controls="{{ collapse_id }}">
+                                            <i class="bi bi-list-ul"></i> Ver silos ({{ row.silos|length }})
+                                        </button>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% if row.silos %}
+                            <tr class="collapse" id="{{ collapse_id }}">
+                                <td colspan="3" class="bg-light">
+                                    <div class="py-2">
+                                        <div class="fw-semibold mb-2">Silos con estado: {{ row.estado }}</div>
+                                        <div class="d-flex flex-wrap gap-2">
+                                            {% for s in row.silos %}
+                                                <span class="badge text-bg-secondary">
+                                                    {{ s.silo }}: {{ "{:,.2f}".format(s.galones) }} gal
+                                                </span>
+                                            {% endfor %}
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endif %}
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center">No hay inventario registrado</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    document.querySelectorAll('[data-progress]').forEach((el) => {
+        const raw = el.getAttribute('data-progress');
+        const value = Number(raw);
+        const safe = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
+        el.style.width = `${safe}%`;
+        el.setAttribute('aria-valuenow', String(safe));
+    });
+
+    // Inicialización de gráficos (ejemplo)
+    const ctx = document.getElementById('occupancyChart');
+    if (ctx) {
+        new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Jugo', 'Concentrado', 'Libre'],
+                datasets: [{
+                    data: [0, 0, 100],
+                    backgroundColor: ['#0d6efd', '#198754', '#e9ecef']
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false
+            }
+        });
+    }
+</script>
+{% endblock %}
