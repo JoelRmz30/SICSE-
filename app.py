@@ -2,9 +2,10 @@ import os
 import re
 import json
 import math
+import secrets
 import pandas as pd
 from io import BytesIO
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_file
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_file, session, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -17,7 +18,7 @@ from sqlalchemy import and_, or_, func
 load_dotenv()
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev_key_for_session_management')
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY') or secrets.token_urlsafe(48)
 
 # Configuración de la base de datos MySQL (Compatible con XAMPP/Laragon)
 user = os.getenv('DB_USER', 'root')
@@ -25,11 +26,36 @@ password = os.getenv('DB_PASSWORD', '')
 host = os.getenv('DB_HOST', 'localhost')
 db_name = os.getenv('DB_NAME', 'sistema_silos')
 
-# Usar mysqlclient o mysql-connector-python
-# Para XAMPP usualmente se usa 'mysql+pymysql' o 'mysql+mysqlconnector'
-# Si falla mysql-connector-python, puedes cambiar a: f'mysql+pymysql://{user}:{password}@{host}/{db_name}'
-app.config['SQLALCHEMY_DATABASE_URI'] = f'mysql+pymysql://{user}:{password}@{host}/{db_name}'
+database_url = os.getenv('DATABASE_URL')
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url or f'mysql+pymysql://{user}:{password}@{host}/{db_name}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+
+def csrf_token():
+    """Devuelve el token CSRF de la sesión, generándolo si no existe."""
+    token = session.get('_csrf_token')
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session['_csrf_token'] = token
+    return token
+
+
+@app.context_processor
+def _inject_csrf_token():
+    """Inyecta `csrf_token()` en todos los templates Jinja2."""
+    return {'csrf_token': csrf_token}
+
+
+@app.before_request
+def _csrf_protect():
+    """Bloquea solicitudes con método de escritura si no traen token CSRF válido."""
+    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        token_form = request.form.get('csrf_token')
+        token_hdr = request.headers.get('X-CSRFToken') or request.headers.get('X-CSRF-Token')
+        token = token_form or token_hdr
+        token_sesion = session.get('_csrf_token')
+        if not token or not token_sesion or token != token_sesion:
+            abort(400)
 
 db = SQLAlchemy(app)
 login_manager = LoginManager()
@@ -2367,4 +2393,6 @@ def gestionar_catalogo(nombre):
 # =====================================================================
 
 if __name__ == '__main__':
-    app.run(debug=True, port=int(os.getenv('PORT', 5000)))
+    debug = os.getenv('FLASK_DEBUG', '0').strip() in ('1', 'true', 'TRUE', 'yes', 'YES')
+    port = int(os.getenv('PORT', 5000))
+    app.run(debug=debug, port=port)

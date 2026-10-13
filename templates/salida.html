@@ -11,6 +11,7 @@
             </div>
             <div class="card-body">
                 <form method="POST">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <div class="mb-3">
                         <label for="id_silo" class="form-label">Silo de Origen</label>
                         <select class="form-select" id="id_silo" name="id_silo" required>

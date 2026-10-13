@@ -148,6 +148,7 @@
                                 <div class="modal-dialog">
                                     <div class="modal-content">
                                         <form method="POST" action="{{ url_for('cambiar_estado_lote', id_inventario=item.id_inventario) }}">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <div class="modal-header">
                                                 <h5 class="modal-title" id="modalEstadoLabel{{ item.id_inventario }}">Cambiar Estado del Lote</h5>
                                                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>

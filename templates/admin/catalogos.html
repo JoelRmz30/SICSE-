@@ -62,6 +62,7 @@
             <div class="card-body">
                 <form method="POST" class="row g-3" id="form-catalogo" novalidate>
                     <input type="hidden" name="accion" value="guardar">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="id_item" id="id_item" value="">
                     {% for fname, flabel, ftype, freq in meta.campos %}
                     <div class="col-md-6">
@@ -152,6 +153,7 @@
                                     </button>
                                     <form method="POST" class="d-inline" onsubmit="return confirm('¿Cambiar el estado de este registro?');">
                                         <input type="hidden" name="accion" value="toggle_activo">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                         <input type="hidden" name="id_item" value="{{ fila.pk }}">
                                         <button type="submit" class="btn btn-sm btn-outline-secondary">
                                             {% if fila.activo %}<i class="bi bi-power me-1"></i>Desactivar{% else %}<i class="bi bi-play me-1"></i>Activar{% endif %}

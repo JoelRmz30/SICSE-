@@ -15,6 +15,7 @@
 <div class="row justify-content-center">
     <div class="col-xl-10 col-lg-11">
         <form id="form-embarque" method="POST" novalidate>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
             {# Encabezado #}
             <div class="card shadow mb-4">

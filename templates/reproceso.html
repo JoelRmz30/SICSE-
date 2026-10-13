@@ -11,6 +11,7 @@
             </div>
             <div class="card-body">
                 <form method="POST">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <div class="row mb-4">
                         <div class="col-md-6">
                             <label for="codigo_lote" class="form-label">Lote a Reprocesar</label>
