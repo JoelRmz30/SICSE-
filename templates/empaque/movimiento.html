@@ -1,0 +1,276 @@
+{# Sub-pestaña C: Registrar movimiento. Fase 4 implementa la lógica de validación y guardado. #}
+{% extends "empaque/base_empaque.html" %}
+{% block empaque_content %}
+
+<div class="empaque-card">
+    <div class="card-title">Registrar movimiento</div>
+
+    <div class="mb-3">
+        <div class="segmented" role="group" aria-label="Tipo de movimiento">
+            <a href="#" id="seg-entrada" class="seg active">Entrada</a>
+            <a href="#" id="seg-salida" class="seg">Salida</a>
+        </div>
+        <input type="hidden" id="mov_tipo" name="mov_tipo" value="entrada">
+    </div>
+
+    <form method="post" action="{{ url_for('empaque_movimiento') }}" id="form-mov" class="row g-3 needs-validation" novalidate>
+        <input type="hidden" name="mov_tipo" id="form-mov-tipo" value="entrada">
+
+        <div class="col-12 col-md-4">
+            <label class="form-label" for="codigo">Artículo</label>
+            <select class="form-select" id="codigo" name="codigo" required>
+                <option value="">Selecciona un artículo</option>
+                {% for a in articulos %}
+                <option value="{{ a.codigo }}" data-um="{{ a.um }}"
+                        data-stock="{{ empaque_format_num(a.stock_actual, a.um) }}">
+                    {{ a.codigo }} · {{ a.nombre }}
+                </option>
+                {% endfor %}
+            </select>
+            <small class="text-muted" id="um-hint">&nbsp;</small>
+            {% if not _empaque_hay_articulos %}
+            <small class="text-danger">
+                Aún no hay artículos. Carga el catálogo en
+                {% if current_user.rol == 'administrador' %}
+                    <a href="{{ url_for('empaque_catalogo', seccion='articulos') }}">Catálogo</a>.
+                {% else %}Catálogo (solo admin).{% endif %}
+            </small>
+            {% endif %}
+        </div>
+
+        <div class="col-6 col-md-3">
+            <label class="form-label" for="cantidad">Cantidad</label>
+            <input type="number" step="0.001" min="0" class="form-control" id="cantidad" name="cantidad"
+                   required value="">
+            <small class="text-muted" id="unidad-hint">&nbsp;</small>
+        </div>
+
+        <div class="col-6 col-md-2">
+            <label class="form-label" for="fecha">Fecha</label>
+            <input type="date" class="form-control" id="fecha" name="fecha"
+                   value="{{ date.today().isoformat() }}" required>
+        </div>
+
+        {# --- Campos condicionales (Entrada) --- #}
+        <div class="col-6 col-md-3 campo-entrada">
+            <label class="form-label" for="id_proveedor">Proveedor</label>
+            <select class="form-select" id="id_proveedor" name="id_proveedor">
+                <option value="">Selecciona proveedor</option>
+                {% for p in proveedores %}
+                <option value="{{ p.id_proveedor }}">{{ p.nombre }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-6 col-md-3 campo-entrada d-md-none"></div>
+        <div class="col-6 col-md-3 campo-entrada">
+            <label class="form-label" for="rechazos">Rechazos</label>
+            <input type="number" step="0.001" min="0" class="form-control" id="rechazos" name="rechazos" value="0">
+            <small class="text-muted">Piezas devueltas al proveedor (default 0).</small>
+        </div>
+
+        {# --- Campos condicionales (Salida) --- #}
+        <div class="col-6 col-md-3 campo-salida d-none">
+            <label class="form-label" for="id_area">Área que solicita</label>
+            <select class="form-select" id="id_area" name="id_area">
+                <option value="">Selecciona área</option>
+                {% for a in areas %}
+                <option value="{{ a.id_area }}" data-nombre="{{ a.nombre }}">{{ a.nombre }}</option>
+                {% endfor %}
+            </select>
+            {% if not _empaque_hay_areas %}
+            <small class="text-danger">No hay áreas configuradas.</small>
+            {% endif %}
+        </div>
+        <div class="col-6 col-md-3 campo-salida d-none d-md-none"></div>
+        <div class="col-12 col-md-6 campo-salida-lote d-none">
+            <label class="form-label" for="id_lote">Lote de pulpa</label>
+            <select class="form-select" id="id_lote" name="id_lote">
+                <option value="">Selecciona lote</option>
+                {% for l in lotes %}
+                <option value="{{ l.id_lote }}">{{ l.codigo_lote }} · {{ l.producto or '' }}</option>
+                {% endfor %}
+            </select>
+            <small class="text-muted">Obligatorio si el área es <strong>Pulpa</strong>.</small>
+        </div>
+
+        <div class="col-12">
+            <label class="form-label" for="comentario">Comentario (opcional)</label>
+            <textarea class="form-control" id="comentario" name="comentario" rows="2" maxlength="500"></textarea>
+        </div>
+
+        <div class="col-12 d-flex gap-2 align-items-center">
+            <button type="submit" class="btn-empaque" id="btn-mov-submit">
+                Registrar entrada
+            </button>
+            <span id="stock-hint" class="text-muted small">&nbsp;</span>
+        </div>
+    </form>
+
+    <div class="kit-box d-none" id="kit-box">
+        <div class="kit-title"><i class="bi bi-box2-heart"></i> Kit de lote (Pulpa)</div>
+        <p class="small text-muted mb-2">
+            Se sugiere el kit estándar. Cantidades editables. Es <strong>todo o nada</strong>:
+            si algún artículo no tiene suficiente stock <em>no se registra nada</em>.
+        </p>
+        {% if kit_filas %}
+        <div class="empaque-table-scroll">
+            <table class="empaque-table">
+                <thead>
+                    <tr>
+                        <th>Artículo</th>
+                        <th class="num">Cantidad sugerida</th>
+                        <th class="num">Disponible</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for k in kit_filas %}
+                    <tr>
+                        <td>{{ k.articulo.nombre if k.articulo else k.codigo }}</td>
+                        <td class="num">{{ k.cantidad_sugerida }}</td>
+                        <td class="num">
+                            {% if k.stock_raw >= k.cantidad_raw %}
+                                <span class="chip chip-success">{{ k.disponible }}</span>
+                            {% else %}
+                                <span class="chip chip-danger" title="Insuficiente">{{ k.disponible }}</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="mt-3">
+            <form method="post" action="{{ url_for('empaque_registrar_kit') }}" class="d-inline">
+                {% if kit_filas %}
+                <input type="hidden" id="kit_id_lote" name="id_lote" value="">
+                <input type="hidden" name="fecha" value="{{ date.today().isoformat() }}">
+                <script>
+                (function(){
+                    const lSel = document.getElementById('id_lote');
+                    const kLote = document.getElementById('kit_id_lote');
+                    function sync(){ if (lSel && kLote){ kLote.value = lSel.value; } }
+                    if (lSel){ lSel.addEventListener('change', sync); sync(); }
+                })();
+                </script>
+                {% endif %}
+                <button type="submit" class="btn-empaque-outline"><i class="bi bi-lightning-charge"></i> Registrar kit completo</button>
+            </form>
+        </div>
+        {% else %}
+        <small>
+            El administrador aún no define un kit para el área Pulpa. Configúralo en
+            {% if current_user.rol == 'administrador' %}
+                <a href="{{ url_for('empaque_catalogo', seccion='kits') }}">Catálogo · Kits</a>.
+            {% else %}Catálogo · Kits (solo administrador).{% endif %}
+        </small>
+        {% endif %}
+    </div>
+</div>
+
+<div class="empaque-card">
+    <div class="card-title">Movimientos recientes</div>
+    {% if not movimientos_recientes %}
+    <div class="empaque-empty">
+        <h5>Aún no registras movimientos.</h5>
+        <p>Empieza con una <em>Entrada</em> de proveedor y luego una <em>Salida</em> al área que solicite.</p>
+    </div>
+    {% else %}
+    <div class="empaque-table-scroll">
+        <table class="empaque-table">
+            <thead>
+                <tr>
+                    <th>Tipo</th>
+                    <th>Artículo</th>
+                    <th class="num">Cantidad</th>
+                    <th>Fecha</th>
+                    <th>Detalle</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for m in movimientos_recientes %}
+                <tr>
+                    <td><span class="chip {{ m.chip }}">{{ m.tipo }}</span></td>
+                    <td>{{ m.articulo }}</td>
+                    <td class="num">{{ m.cantidad }}</td>
+                    <td>{{ m.fecha }}</td>
+                    <td>{{ m.detalle }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+(function(){
+    const segEntrada = document.getElementById('seg-entrada');
+    const segSalida  = document.getElementById('seg-salida');
+    const tipoInput  = document.getElementById('form-mov-tipo');
+    const btnSubmit  = document.getElementById('btn-mov-submit');
+    const camposEntrada = document.querySelectorAll('.campo-entrada');
+    const camposSalida  = document.querySelectorAll('.campo-salida');
+    const campoLote     = document.querySelector('.campo-salida-lote');
+    const kitBox        = document.getElementById('kit-box');
+    const selectArea    = document.getElementById('id_area');
+    const selectArt     = document.getElementById('codigo');
+    const umHint        = document.getElementById('um-hint');
+    const unidadHint    = document.getElementById('unidad-hint');
+    const stockHint     = document.getElementById('stock-hint');
+    const fecha         = document.getElementById('fecha');
+
+    // Fecha máxima = hoy (no futura). Validación cliente + backend replica.
+    fecha.max = new Date().toISOString().slice(0, 10);
+
+    function applyTipo(tipo){
+        tipoInput.value = tipo;
+        if (tipo === 'entrada'){
+            segEntrada.classList.add('active');
+            segSalida.classList.remove('active');
+            camposEntrada.forEach(e => e.classList.remove('d-none'));
+            camposSalida.forEach(e => e.classList.add('d-none'));
+            campoLote.classList.add('d-none');
+            kitBox.classList.add('d-none');
+            btnSubmit.textContent = 'Registrar entrada';
+        } else {
+            segSalida.classList.add('active');
+            segEntrada.classList.remove('active');
+            camposEntrada.forEach(e => e.classList.add('d-none'));
+            camposSalida.forEach(e => e.classList.remove('d-none'));
+            btnSubmit.textContent = 'Registrar salida';
+            toggleLoteByArea();
+        }
+    }
+    segEntrada.addEventListener('click', e => { e.preventDefault(); applyTipo('entrada'); });
+    segSalida.addEventListener('click',  e => { e.preventDefault(); applyTipo('salida'); });
+
+    function toggleLoteByArea(){
+        if (!selectArea.value) { campoLote.classList.add('d-none'); kitBox.classList.add('d-none'); return; }
+        const nombre = selectArea.options[selectArea.selectedIndex].dataset.nombre || '';
+        if (nombre.toLowerCase() === 'pulpa'){
+            campoLote.classList.remove('d-none');
+            // Requiere lote => kit box (cuando existan filas de kit)
+            kitBox.classList.remove('d-none');
+        } else {
+            campoLote.classList.add('d-none');
+            kitBox.classList.add('d-none');
+        }
+    }
+    if (selectArea) selectArea.addEventListener('change', toggleLoteByArea);
+
+    function updateArtInfo(){
+        const opt = selectArt.options[selectArt.selectedIndex];
+        if (!opt || !opt.value){ umHint.innerHTML = '&nbsp;'; unidadHint.innerHTML = '&nbsp;'; stockHint.innerHTML = '&nbsp;'; return; }
+        const um = opt.dataset.um || '';
+        const stock = opt.dataset.stock || '';
+        umHint.innerHTML = 'Unidad: <strong>' + um + '</strong>';
+        unidadHint.innerHTML = 'Unidad: ' + um;
+        stockHint.innerHTML = 'Disponible: <strong>' + stock + ' ' + um + '</strong>';
+    }
+    if (selectArt) selectArt.addEventListener('change', updateArtInfo);
+
+    applyTipo('entrada');
+})();
+</script>
+
+{% endblock %}

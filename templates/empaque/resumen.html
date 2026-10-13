@@ -1,0 +1,219 @@
+{# Sub-pestaña A: Resumen con KPIs, tarjetas atención y gráficas. #}
+{% extends "empaque/base_empaque.html" %}
+{% block empaque_content %}
+
+<div class="row g-3 mb-3">
+    <div class="col-6 col-md-3 col-xl">
+        <div class="kpi">
+            <div class="kpi-label">Artículos activos</div>
+            <div class="kpi-value">{{ kpis.articulos_activos }}</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl">
+        <div class="kpi">
+            <div class="kpi-label">Negativos / sin stock</div>
+            <div class="kpi-value {{ 'danger' if kpis.negativos_sin_stock else '' }}">{{ kpis.negativos_sin_stock }}</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl">
+        <div class="kpi">
+            <div class="kpi-label">Bajo mínimo / diferencia</div>
+            <div class="kpi-value {{ 'warning' if kpis.bajo_o_diferencia else '' }}">{{ kpis.bajo_o_diferencia }}</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl">
+        <div class="kpi">
+            <div class="kpi-label">Sin dato Dynamics</div>
+            <div class="kpi-value {{ 'warning' if kpis.sin_dato_dynamics else '' }}">{{ kpis.sin_dato_dynamics }}</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl">
+        <div class="kpi">
+            <div class="kpi-label">Movimientos en {{ mes_actual }}</div>
+            <div class="kpi-value">{{ kpis.movs_mes }}</div>
+        </div>
+    </div>
+</div>
+
+{% if kpis.articulos_activos == 0 and not entradas_recientes %}
+<div class="empaque-empty mb-3">
+    <h5>Sin artículos aún</h5>
+    <p>El módulo ya está listo. Carga tu catálogo y movimientos:
+       {% if current_user.rol == 'administrador' %}
+       <a class="btn-empaque-outline ms-1" href="{{ url_for('empaque_catalogo') }}">Ir a Catálogo</a>
+       o registra la primera entrada en
+       <a class="btn-empaque-outline ms-1" href="{{ url_for('empaque_movimiento') }}">Registrar movimiento</a>.
+       {% else %}
+       avisa al administrador para que cargue el catálogo inicial.
+       {% endif %}
+    </p>
+</div>
+{% endif %}
+
+<div class="row g-3">
+    {# Atención #}
+    <div class="col-lg-4">
+        <div class="empaque-card">
+            <div class="card-title">Requieren atención</div>
+            {% if not requieren_atencion %}
+            <div class="empaque-empty" style="padding: 1.5rem 1rem;">
+                <small>✓ Sin alertas. Todo al día.</small>
+            </div>
+            {% else %}
+            <ul class="list-group" style="border-radius:8px;">
+                {% for a in requieren_atencion %}
+                <li class="list-group-item d-flex align-items-center justify-content-between gap-2"
+                    style="border:1px solid #D5DEE2;">
+                    <div style="min-width:0;">
+                        <div class="fw-semibold text-truncate" style="max-width:220px;">{{ a.nombre }}</div>
+                        <div class="small text-muted">
+                            <code>{{ a.codigo }}</code> · {{ a.categoria or 'Sin categoría' }}
+                        </div>
+                        <div class="small mt-1">
+                            Stock: <strong>{{ empaque_format_num(a.stock, a.um) }} {{ a.um }}</strong>
+                            {% if a.minimo is not none %} · Mínimo: {{ empaque_format_num(a.minimo, a.um) }} {{ a.um }}{% endif %}
+                            {% if a.dynamics is not none %} · Dyn: {{ empaque_format_num(a.dynamics, a.um) }} {{ a.um }}{% endif %}
+                        </div>
+                    </div>
+                    <span class="chip chip-{{ a.estado_color }}" style="white-space:nowrap;">{{ a.estado_etiqueta }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+        </div>
+    </div>
+
+    {# Salidas x mes #}
+    <div class="col-lg-8">
+        <div class="empaque-card">
+            <div class="card-title">Salidas por mes</div>
+            {% if not salidas_mes or salidas_mes | sum(attribute='cantidad') == 0 %}
+            <div class="empaque-empty" style="padding:1.5rem 1rem;">
+                <small>Sin salidas registradas. La gráfica aparecerá cuando registres salidas.</small>
+            </div>
+            {% else %}
+                {% set max_mes = salidas_mes | map(attribute='cantidad') | max %}
+                <div class="d-flex align-items-end gap-3" style="height: 220px; padding: 1rem .5rem .5rem;">
+                {% for m in salidas_mes %}
+                    <div class="flex-grow-1 d-flex flex-column align-items-center gap-2">
+                        <div class="small fw-bold" style="color:#1F5C7A;">{{ m.cantidad | round(2) if m.cantidad % 1 else (m.cantidad | int) }}</div>
+                        <div class="w-100" style="background:var(--empaque-bg); border-radius:6px; position:relative; flex:1; min-height:30px;">
+                            <div style="position:absolute; left:0; right:0; bottom:0; border-radius:6px;
+                                        background:linear-gradient(180deg,#1F5C7A,#3C88AB);
+                                        height:{{ 100 if max_mes == 0 else ((m.cantidad / max_mes * 100) | round) }}%; min-height:4px;">
+                            </div>
+                        </div>
+                        <div class="small text-muted">{{ m.mes }}</div>
+                    </div>
+                {% endfor %}
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    {# Salidas x área #}
+    <div class="col-12">
+        <div class="empaque-card">
+            <div class="card-title">Salidas por área solicitante · {{ mes_actual }}</div>
+            {% if not salidas_area %}
+            <div class="empaque-empty" style="padding:1.5rem 1rem;">
+                <small>Sin salidas en el mes actual.</small>
+            </div>
+            {% else %}
+                {% set max_area = salidas_area | map(attribute='cantidad') | max %}
+                <div class="row g-2 align-items-center">
+                {% for s in salidas_area %}
+                    <div class="col-12 col-md-6">
+                        <div class="d-flex align-items-center gap-3 mb-1">
+                            <div class="fw-semibold" style="min-width:160px;">{{ s.area }}</div>
+                            <div class="flex-grow-1" style="background:var(--empaque-bg); border-radius:6px; height:26px; position:relative;">
+                                <div style="position:absolute; left:0; top:0; bottom:0; border-radius:6px;
+                                            background:linear-gradient(90deg,#1F5C7A,#79B4CC);
+                                            width:{{ 100 if max_area == 0 else ((s.cantidad / max_area * 100) | round) }}%; min-width:6px;">
+                                </div>
+                            </div>
+                            <div class="small fw-bold" style="color:#1F5C7A; min-width: 80px; text-align:right;">
+                                {{ s.cantidad | round(2) if s.cantidad % 1 else (s.cantidad | int) }}
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    {# Consumo x lote Pulpa #}
+    <div class="col-12">
+        <div class="empaque-card">
+            <div class="card-title">Consumo por lote de pulpa · Top 5 {{ mes_actual }}</div>
+            {% if not lotes_pulpa %}
+            <div class="empaque-empty" style="padding:1.5rem 1rem;">
+                <small>Sin salidas al área Pulpa este mes. Aquí aparecerán los lotes con mayor consumo.</small>
+            </div>
+            {% else %}
+                {% set max_lote = lotes_pulpa | map(attribute='cantidad') | max %}
+                <div class="row g-2">
+                {% for l in lotes_pulpa %}
+                    <div class="col-12 col-md-6">
+                        <div class="card p-3" style="border:1px solid #D5DEE2; border-radius:8px;">
+                            <div class="d-flex justify-content-between mb-2">
+                                <div>
+                                    <strong>{{ l.lote }}</strong>
+                                    {% if l.producto %}<div class="small text-muted">{{ l.producto }}</div>{% endif %}
+                                </div>
+                                <span class="chip chip-info">{{ l.cantidad | round(2) if l.cantidad % 1 else (l.cantidad | int) }}</span>
+                            </div>
+                            <div style="background:var(--empaque-bg); border-radius:6px; height:12px; position:relative;">
+                                <div style="position:absolute; left:0; top:0; bottom:0; border-radius:6px;
+                                            background:linear-gradient(90deg,#0b6b3a,#69B088);
+                                            width:{{ 100 if max_lote == 0 else ((l.cantidad / max_lote * 100) | round) }}%; min-width:6px;">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    {# Entradas recientes #}
+    <div class="col-12">
+        <div class="empaque-card">
+            <div class="card-title">Entradas recientes</div>
+            {% if not entradas_recientes %}
+            <div class="empaque-empty" style="padding:1.5rem 1rem;">
+                <small>Sin entradas aún. Registra la primera en
+                    <a href="{{ url_for('empaque_movimiento') }}">Registrar movimiento</a>.
+                </small>
+            </div>
+            {% else %}
+            <div class="empaque-table-scroll">
+                <table class="empaque-table">
+                    <thead>
+                        <tr>
+                            <th>Fecha</th>
+                            <th>Artículo</th>
+                            <th>Proveedor</th>
+                            <th class="num">Cantidad</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for e in entradas_recientes %}
+                        <tr>
+                            <td>{{ e.fecha[:10] if e.fecha else '—' }}</td>
+                            <td>{{ e.articulo }}</td>
+                            <td>{{ e.proveedor or '—' }}</td>
+                            <td class="num">{{ empaque_format_num(e.cantidad, e.um) }} {{ e.um }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% endblock %}

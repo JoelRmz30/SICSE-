@@ -1,0 +1,221 @@
+{# Sub-pestaña B: Inventario. Fase 5 filtra, calcula stock por batch y dibuja panel lateral. #}
+{% extends "empaque/base_empaque.html" %}
+{% block empaque_content %}
+
+<div class="empaque-card">
+    <form method="get" action="{{ url_for('empaque_inventario') }}" class="row g-3 mb-2 align-items-end">
+        <div class="col-12 col-md-5">
+            <label class="form-label" for="buscar">Buscador</label>
+            <input type="text" id="buscar" name="buscar" class="form-control"
+                   value="{{ filtros.buscar }}"
+                   placeholder="Buscar por nombre o código" autocomplete="off">
+        </div>
+        <div class="col-12 col-md-4">
+            <label class="form-label" for="categoria">Categoría</label>
+            <select id="categoria" name="categoria" class="form-select">
+                <option value="">Todas las categorías</option>
+                {% for c in categorias %}
+                <option value="{{ c.id_categoria }}"
+                        {% if filtros.id_categoria == c.id_categoria %}selected{% endif %}>
+                    {{ c.nombre }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-12 col-md-3 d-flex gap-2">
+            <button class="btn-empaque w-100" type="submit">Aplicar</button>
+            <a class="btn-empaque-outline w-100" href="{{ url_for('empaque_inventario') }}">Limpiar</a>
+        </div>
+    </form>
+
+    <div class="mt-3">
+        {% set estados = [
+            ('todos',              'Todos'),
+            ('negativo_dynamics',  'Negativo en Dynamics'),
+            ('sin_stock',          'Sin stock'),
+            ('bajo_minimo',        'Bajo mínimo'),
+            ('sin_dynamics',       'Sin dato Dynamics'),
+            ('con_diferencia',     'Con diferencia'),
+            ('cuadra',             'Cuadra'),
+        ] %}
+        {% for clave, etiq in estados %}
+        <a class="chip-filter {% if filtros.estado == clave %}active{% endif %}"
+           href="{{ url_for('empaque_inventario', buscar=filtros.buscar, categoria=filtros.id_categoria, estado=clave) }}">
+            {{ etiq }}
+        </a>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="empaque-card p-0">
+    <div class="empaque-table-scroll" style="border:none; border-radius: 8px 8px 0 0;">
+        <table class="empaque-table">
+            <thead>
+                <tr>
+                    <th>Código</th>
+                    <th>Producto</th>
+                    <th>Categoría</th>
+                    <th>UM</th>
+                    <th class="num">Stock actual</th>
+                    <th class="num">Físico Dynamics</th>
+                    <th class="num">Diferencia</th>
+                    <th>Estado</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if not _empaque_hay_articulos %}
+                <tr>
+                    <td colspan="8">
+                        <div class="empaque-empty" style="border:none;">
+                            <h5>Aún no hay artículos.</h5>
+                            <p>Agrega el primero en
+                            {% if current_user.rol == 'administrador' %}
+                                <a href="{{ url_for('empaque_catalogo', seccion='articulos') }}">Catálogo y configuración</a>.
+                            {% else %}
+                                Catálogo y configuración (solo administrador).
+                            {% endif %}
+                            </p>
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                    {% for a in articulos %}
+                    {% set s = stock_map.get(a.codigo, 0) %}
+                    {% set dyn = dynamics_map.get(a.codigo) %}
+                    {% set dif = diferencia_map.get(a.codigo) %}
+                    {% set minimo = a.stock_minimo if a.stock_minimo is not none else 0 %}
+                    {% set clave, etiq, color = empaque_estado_desde_valores(s, dyn, dif, minimo) %}
+                    <tr style="cursor:pointer;"
+                        data-codigo="{{ a.codigo }}"
+                        class="empaque-articulo-row">
+                        <td><code>{{ a.codigo }}</code></td>
+                        <td>{{ a.nombre }}</td>
+                        <td>{{ a.categoria.nombre if a.categoria else '—' }}</td>
+                        <td>{{ a.um }}</td>
+                        <td class="num"><strong>{{ empaque_format_num(s, a.um) }}</strong></td>
+                        <td class="num">
+                            {% if dyn is none %}sin dato
+                            {% else %}{{ empaque_format_num(dyn, a.um) }}{% endif %}
+                        </td>
+                        <td class="num">
+                            {% if dif is none %}—
+                            {% else %}
+                                {% if dif > 0 %}+{% endif %}{{ empaque_format_num(dif, a.um) }}
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="chip chip-{{ color }}">{{ etiq }}</span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+    <div class="px-3 py-2 border-top" style="color:#5B6B74; font-size:.82rem;">
+        <i class="bi bi-info-circle"></i>
+        Stock actual es el control interno de Empaque. Físico Dynamics es el registro oficial.
+        Diferencia = stock actual menos físico. Haz clic en una fila para ver historial.
+    </div>
+</div>
+
+{# Panel lateral con historial por artículo. #}
+<div class="offcanvas offcanvas-end" tabindex="-1" id="panel-articulo" aria-labelledby="panel-articulo-titulo"
+     style="width: min(560px, 92vw); background:#F2F5F6; border-left:1px solid #D5DEE2;">
+    <div class="offcanvas-header" style="background:#FFFFFF; border-bottom:1px solid #D5DEE2;">
+        <div>
+            <h5 class="offcanvas-title" id="panel-articulo-titulo">Cargando…</h5>
+            <div class="small text-muted" id="panel-articulo-sub">&nbsp;</div>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Cerrar"></button>
+    </div>
+    <div class="offcanvas-body" id="panel-articulo-body" style="padding-top:1rem;">
+        <div class="d-flex flex-wrap gap-2 mb-3" id="panel-kpis"></div>
+        <h6 class="fw-bold mb-2">Historial reciente</h6>
+        <div id="panel-movimientos" class="empaque-table-scroll" style="border:1px solid #D5DEE2; border-radius:8px; background:#FFFFFF;"></div>
+    </div>
+</div>
+
+<script>
+(function(){
+    const off = new bootstrap.Offcanvas(document.getElementById('panel-articulo'));
+    const tit = document.getElementById('panel-articulo-titulo');
+    const sub = document.getElementById('panel-articulo-sub');
+    const kpis = document.getElementById('panel-kpis');
+    const movs = document.getElementById('panel-movimientos');
+    const chipCls = {
+        'entrada': 'chip-success',
+        'salida':  'chip-danger',
+        'ajuste':  'chip-secondary',
+    };
+
+    document.querySelectorAll('.empaque-articulo-row').forEach(row => {
+        row.addEventListener('click', () => {
+            const codigo = row.dataset.codigo;
+            abrir(codigo);
+        });
+    });
+
+    function abrir(codigo){
+        tit.textContent = 'Cargando…';
+        sub.innerHTML = '&nbsp;';
+        kpis.innerHTML = '<span class="text-muted small">…</span>';
+        movs.innerHTML = '<div class="p-3 small text-muted">Cargando historial…</div>';
+        off.show();
+        fetch('{{ url_for("empaque_api_articulo_detalle", codigo="__COD__") }}'.replace('__COD__', encodeURIComponent(codigo)))
+            .then(r => r.json())
+            .then(data => {
+                if (!data.ok){ alert('No se pudo cargar el artículo.'); return; }
+                render(data);
+            })
+            .catch(err => { movs.innerHTML = '<div class="p-3 small text-danger">Error al cargar: ' + err + '</div>'; });
+    }
+
+    function render(data){
+        const a = data.articulo;
+        tit.textContent = a.nombre + ' · ' + a.codigo;
+        sub.textContent = 'Categoría: ' + (a.categoria || '—') + ' · UM: ' + a.um;
+        const kpi = (etq, valor, cls) => `<span class="chip ${cls||'chip-secondary'}"><strong>${etq}:</strong> ${valor}</span>`;
+        const estCls = ({
+            'neg_dynamics':    'chip-danger',
+            'sin_stock':       'chip-danger',
+            'bajo_min':        'chip-warning',
+            'sin_dynamics':    'chip-warning',
+            'con_diferencia':  'chip-info',
+            'cuadra':          'chip-success',
+        })[a.estado_clave] || 'chip-secondary';
+        kpis.innerHTML =
+            kpi('Stock', formatNum(a.stock_actual, a.um)) +
+            (a.fisico_dynamics === null ? kpi('Dynamics', 'sin dato', 'chip-warning') : kpi('Dynamics', formatNum(a.fisico_dynamics, a.um))) +
+            (a.diferencia === null ? '' : kpi('Δ', (a.diferencia > 0 ? '+' : '') + formatNum(a.diferencia, a.um))) +
+            kpi('Estado', a.estado_etiqueta, estCls);
+
+        if (!data.movimientos.length){
+            movs.innerHTML = '<div class="empaque-empty" style="border:none;"><p>Aún no hay movimientos.</p></div>';
+            return;
+        }
+        let html = '<table class="empaque-table"><thead><tr><th>Tipo</th><th>Fecha</th><th class="num">Cantidad</th><th>Detalle</th></tr></thead><tbody>';
+        data.movimientos.slice(0, 60).forEach(m => {
+            html += '<tr>';
+            html += `<td><span class="chip ${chipCls[m.tipo]||'chip-secondary'}">${m.tipo}</span></td>`;
+            html += `<td>${m.fecha ? m.fecha.slice(0,10) : '—'}</td>`;
+            html += `<td class="num">${formatNum(m.cantidad, a.um)}</td>`;
+            const det = [m.detalle, m.comentario, m.usuario ? `· usuario ${m.usuario}` : ''].filter(Boolean).join(' ');
+            html += `<td class="small">${det || '—'}</td>`;
+            html += '</tr>';
+        });
+        html += '</tbody></table>';
+        movs.innerHTML = html;
+    }
+
+    function formatNum(n, um){
+        if (n === null || n === undefined) return '—';
+        const num = Number(n);
+        const entera = (um || 'Pz').toLowerCase() === 'pz';
+        if (entera) return String(Math.round(num));
+        return num.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 3 });
+    }
+})();
+</script>
+
+{% endblock %}

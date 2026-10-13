@@ -1,0 +1,749 @@
+{# Sub-pestaña D: Catálogo y configuración (solo admin). Fase 3 implementa CRUDs reales. #}
+{% extends "empaque/base_empaque.html" %}
+{% block empaque_content %}
+
+<nav class="catalogo-nav" aria-label="Secciones del catálogo">
+    {% set secciones = [
+        ('articulos',      'Artículos',      'bi-box-seam'),
+        ('categorias',     'Categorías',     'bi-tags'),
+        ('areas',          'Áreas',          'bi-diagram-3'),
+        ('proveedores',    'Proveedores',    'bi-truck'),
+        ('kits',           'Kits de lote',   'bi-box2-heart'),
+        ('carga_masiva',   'Carga masiva',   'bi-cloud-upload'),
+        ('conciliacion',   'Conciliación',   'bi-arrow-repeat'),
+        ('ajustes',        'Ajustes',        'bi-sliders'),
+        ('exportacion',    'Exportar',       'bi-file-earmark-spreadsheet'),
+    ] %}
+    {% for id_seccion, titulo, icono in secciones %}
+    <a href="#sec-{{ id_seccion }}" class="{% if seccion == id_seccion %}activa{% endif %}">
+        <i class="bi {{ icono }}"></i> {{ titulo }}
+    </a>
+    {% endfor %}
+</nav>
+
+{# ===========================================================
+   Artículos
+   =========================================================== #}
+<section id="sec-articulos" class="section-anchor empaque-card">
+    <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-2">
+        <div class="card-title mb-0" style="margin:0;">Artículos</div>
+        <button class="btn-empaque" data-bs-toggle="collapse" data-bs-target="#collapse-art-nuevo"
+                aria-expanded="false" aria-controls="collapse-art-nuevo">
+            <i class="bi bi-plus-lg"></i> Nuevo artículo
+        </button>
+    </div>
+
+    <div class="collapse mt-3" id="collapse-art-nuevo">
+        <div class="card" style="border:1px solid #D5DEE2; border-radius: 8px; padding: 1rem;">
+            <form method="post" action="{{ url_for('empaque_catalogo_guardar_articulo') }}" class="row g-3">
+                <input type="hidden" name="codigo_original">
+                <div class="col-12 col-md-3">
+                    <label class="form-label">Código</label>
+                    <input type="text" name="codigo" class="form-control" maxlength="20" required
+                           placeholder="IN00120071">
+                </div>
+                <div class="col-12 col-md-5">
+                    <label class="form-label">Nombre</label>
+                    <input type="text" name="nombre" class="form-control" maxlength="255" required>
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label">Categoría</label>
+                    <select name="id_categoria" class="form-select">
+                        <option value="">(sin categoría)</option>
+                        {% for c in categorias if c.activo %}
+                        <option value="{{ c.id_categoria }}">{{ c.nombre }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label">Unidad</label>
+                    <select name="um" class="form-select" required>
+                        <option value="Pz">Pz (entera)</option>
+                        <option value="Kg">Kg (decimales)</option>
+                    </select>
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label">Almacén</label>
+                    <input type="text" name="almacen" class="form-control" value="CP005" maxlength="20">
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label">Stock mínimo</label>
+                    <input type="number" step="0.001" min="0" name="stock_minimo" class="form-control"
+                           placeholder="Opcional">
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label">Físico Dynamics</label>
+                    <input type="number" step="0.001" name="fisico_dynamics" class="form-control"
+                           placeholder="Opcional">
+                </div>
+                <div class="col-12 d-flex gap-2">
+                    <button class="btn-empaque" type="submit">Guardar</button>
+                    <button type="button" class="btn-empaque-outline"
+                            data-bs-toggle="collapse" data-bs-target="#collapse-art-nuevo">Cancelar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <hr class="section-divider">
+
+    <div class="empaque-table-scroll">
+        <table class="empaque-table">
+            <thead>
+                <tr>
+                    <th>Código</th>
+                    <th>Nombre</th>
+                    <th>Categoría</th>
+                    <th>UM</th>
+                    <th class="num">Mínimo</th>
+                    <th class="num">Físico Dyn.</th>
+                    <th>Estado</th>
+                    <th>Acciones</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if not articulos %}
+                <tr>
+                    <td colspan="8">
+                        <div class="empaque-empty" style="border:none;">
+                            <h5>Aún no tienes artículos.</h5>
+                            <p>Crea el primero usando el botón "Nuevo artículo" de arriba.</p>
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                    {% for a in articulos %}
+                    {% set clave, etiq, color = a.estado_articulo %}
+                    <tr>
+                        <td><code>{{ a.codigo }}</code></td>
+                        <td>
+                            {% if not a.activo %}<del style="color:#8a9aa3;">{% endif %}
+                            {{ a.nombre }}
+                            {% if not a.activo %}</del>{% endif %}
+                        </td>
+                        <td>{{ a.categoria.nombre if a.categoria else '—' }}</td>
+                        <td>{{ a.um }}</td>
+                        <td class="num">{{ empaque_format_num(a.stock_minimo, a.um) if a.stock_minimo is not none else '—' }}</td>
+                        <td class="num">{{ empaque_format_num(a.fisico_dynamics, a.um) if a.fisico_dynamics is not none else '—' }}</td>
+                        <td>
+                            {% if not a.activo %}<span class="chip chip-secondary">Inactivo</span>
+                            {% else %}<span class="chip chip-{{ color }}">{{ etiq }}</span>{% endif %}
+                        </td>
+                        <td>
+                            <button class="btn-empaque-outline btn-sm me-1" style="padding: .2rem .5rem;">Editar</button>
+                            <form method="post" action="{{ url_for('empaque_catalogo_toggle_articulo') }}" class="d-inline">
+                                <input type="hidden" name="codigo" value="{{ a.codigo }}">
+                                <button class="btn btn-sm btn-outline-secondary" type="submit"
+                                        style="padding: .2rem .5rem;">
+                                    {% if a.activo %}Inactivar{% else %}Activar{% endif %}
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+{# ===========================================================
+   Categorías
+   =========================================================== #}
+<section id="sec-categorias" class="section-anchor empaque-card">
+    <div class="card-title">Categorías</div>
+    <form method="post" action="{{ url_for('empaque_catalogo_guardar_categoria') }}" class="row g-3 mb-3">
+        <div class="col-12 col-md-6">
+            <label class="form-label">Nueva categoría</label>
+            <input type="text" name="nombre" class="form-control" maxlength="100" required>
+        </div>
+        <div class="col-12 col-md-3 d-flex align-items-end">
+            <button class="btn-empaque w-100" type="submit">Agregar</button>
+        </div>
+    </form>
+    <div class="empaque-table-scroll">
+        <table class="empaque-table">
+            <thead>
+                <tr><th>Categoría</th><th>Estado</th><th>Acciones</th></tr>
+            </thead>
+            <tbody>
+                {% if not categorias %}
+                <tr><td colspan="3" class="text-muted text-center py-4">Aún no hay categorías.</td></tr>
+                {% else %}
+                    {% for c in categorias %}
+                    <tr>
+                        <td>
+                            {% if not c.activo %}<del style="color:#8a9aa3;">{% endif %}
+                            {{ c.nombre }}{% if not c.activo %}</del>{% endif %}
+                        </td>
+                        <td>{% if c.activo %}<span class="chip chip-success">Activa</span>{% else %}<span class="chip chip-secondary">Inactiva</span>{% endif %}</td>
+                        <td><small class="text-muted">Implementación Fase 3.</small></td>
+                    </tr>
+                    {% endfor %}
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+{# ===========================================================
+   Áreas
+   =========================================================== #}
+<section id="sec-areas" class="section-anchor empaque-card">
+    <div class="card-title">Áreas solicitantes</div>
+    <form method="post" action="{{ url_for('empaque_catalogo_guardar_area') }}" class="row g-3 mb-3">
+        <div class="col-12 col-md-6">
+            <label class="form-label">Nueva área</label>
+            <input type="text" name="nombre" class="form-control" maxlength="100" required>
+            <small class="text-muted">Si el nombre es <strong>Pulpa</strong>, las salidas de esa área requieren un lote asociado.</small>
+        </div>
+        <div class="col-12 col-md-3 d-flex align-items-end">
+            <button class="btn-empaque w-100" type="submit">Agregar</button>
+        </div>
+    </form>
+    <div class="empaque-table-scroll">
+        <table class="empaque-table">
+            <thead><tr><th>Área</th><th>Estado</th><th>Acciones</th></tr></thead>
+            <tbody>
+                {% if not areas %}
+                <tr><td colspan="3" class="text-muted text-center py-4">Aún no hay áreas.</td></tr>
+                {% else %}
+                    {% for a in areas %}
+                    <tr>
+                        <td>
+                            {% if not a.activo %}<del style="color:#8a9aa3;">{% endif %}
+                            {{ a.nombre }}{% if not a.activo %}</del>{% endif %}
+                            {% if a.nombre == 'Pulpa' %} <span class="chip chip-info ms-1">Requiere lote</span>{% endif %}
+                        </td>
+                        <td>{% if a.activo %}<span class="chip chip-success">Activa</span>{% else %}<span class="chip chip-secondary">Inactiva</span>{% endif %}</td>
+                        <td><small class="text-muted">Implementación Fase 3.</small></td>
+                    </tr>
+                    {% endfor %}
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+{# ===========================================================
+   Proveedores
+   =========================================================== #}
+<section id="sec-proveedores" class="section-anchor empaque-card">
+    <div class="card-title">Proveedores</div>
+    <form method="post" action="{{ url_for('empaque_catalogo_guardar_proveedor') }}" class="row g-3 mb-3">
+        <div class="col-12 col-md-8">
+            <label class="form-label">Nuevo proveedor</label>
+            <input type="text" name="nombre" class="form-control" maxlength="200" required>
+        </div>
+        <div class="col-12 col-md-4 d-flex align-items-end">
+            <button class="btn-empaque w-100" type="submit">Agregar</button>
+        </div>
+    </form>
+    <div class="empaque-table-scroll">
+        <table class="empaque-table">
+            <thead><tr><th>Proveedor</th><th>Estado</th><th>Acciones</th></tr></thead>
+            <tbody>
+                {% if not proveedores %}
+                <tr><td colspan="3" class="text-muted text-center py-4">Aún no hay proveedores.</td></tr>
+                {% else %}
+                    {% for p in proveedores %}
+                    <tr>
+                        <td>
+                            {% if not p.activo %}<del style="color:#8a9aa3;">{% endif %}
+                            {{ p.nombre }}{% if not p.activo %}</del>{% endif %}
+                        </td>
+                        <td>{% if p.activo %}<span class="chip chip-success">Activo</span>{% else %}<span class="chip chip-secondary">Inactivo</span>{% endif %}</td>
+                        <td><small class="text-muted">Implementación Fase 3.</small></td>
+                    </tr>
+                    {% endfor %}
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+{# ===========================================================
+   Kits
+   =========================================================== #}
+<section id="sec-kits" class="section-anchor empaque-card">
+    <div class="card-title">Kit por lote (Pulpa)</div>
+    <p class="small text-muted">
+        Define la lista sugerida de artículos y cantidades que normalmente consume un lote de pulpa.
+        Al registrar una salida a Pulpa se muestra el kit como atajo de carga rápida (TODO O NADA).
+    </p>
+    <form method="post" action="{{ url_for('empaque_catalogo_guardar_kit') }}" class="row g-3 mb-3">
+        <div class="col-6 col-md-3">
+            <label class="form-label">Área</label>
+            <select name="id_area" class="form-select" required>
+                <option value="">Selecciona</option>
+                {% for a in areas if a.activo %}
+                <option value="{{ a.id_area }}" {% if a.nombre == 'Pulpa' %}selected{% endif %}>{{ a.nombre }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-12 col-md-5">
+            <label class="form-label">Artículo</label>
+            <select name="codigo" class="form-select" required>
+                <option value="">Selecciona artículo</option>
+                {% for a in articulos if a.activo %}
+                <option value="{{ a.codigo }}">{{ a.codigo }} · {{ a.nombre }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-6 col-md-2">
+            <label class="form-label">Cantidad sugerida</label>
+            <input type="number" step="0.001" min="0.001" name="cantidad_sugerida" class="form-control" required>
+        </div>
+        <div class="col-6 col-md-2 d-flex align-items-end">
+            <button class="btn-empaque w-100" type="submit">Agregar</button>
+        </div>
+    </form>
+    <div class="empaque-table-scroll">
+        <table class="empaque-table">
+            <thead>
+                <tr><th>Área</th><th>Artículo</th><th>UM</th><th class="num">Cantidad sugerida</th><th>Acciones</th></tr>
+            </thead>
+            <tbody>
+                {% if not kits %}
+                <tr><td colspan="5" class="text-muted text-center py-4">
+                    No hay kits definidos aún. El área Pulpa debe existir en <a href="#sec-areas">Áreas</a>.
+                </td></tr>
+                {% else %}
+                    {% for k in kits %}
+                    <tr>
+                        <td>{{ k.area.nombre }}</td>
+                        <td>{{ k.articulo.codigo }} · {{ k.articulo.nombre }}</td>
+                        <td>{{ k.articulo.um }}</td>
+                        <td class="num">{{ empaque_format_num(k.cantidad_sugerida, k.articulo.um) }}</td>
+                        <td>
+                            <form method="post" action="{{ url_for('empaque_catalogo_eliminar_kit', id_kit=k.id_kit) }}" class="d-inline">
+                                <button class="btn btn-sm btn-outline-danger" type="submit"
+                                        style="padding: .2rem .55rem;">Quitar</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+{# ===========================================================
+   Carga masiva
+   =========================================================== #}
+<section id="sec-carga_masiva" class="section-anchor empaque-card">
+    <div class="card-title">Carga masiva (Excel)</div>
+    <p class="small text-muted mb-3">
+        Plantillas vacías para cargar tu catálogo o movimientos históricos.
+        La carga masiva valida TODO antes de guardar: filas con error se reportan,
+        filas correctas se pueden aplicar.
+    </p>
+    <div class="row g-3">
+        <div class="col-12 col-md-4">
+            <div class="card p-3 h-100" style="border:1px solid #D5DEE2; border-radius:8px;">
+                <h6 class="fw-bold mb-2">Catálogo de artículos</h6>
+                <p class="small text-muted">Columnas: código, nombre, categoría, UM, stock mínimo.</p>
+                <a class="btn-empaque-outline mb-2 d-block text-center"
+                   href="{{ url_for('empaque_carga_masiva_plantilla', tipo='articulos') }}">
+                    <i class="bi bi-download"></i> Descargar plantilla
+                </a>
+                <form method="post" action="{{ url_for('empaque_carga_masiva_articulos') }}" enctype="multipart/form-data"
+                      class="row g-2 align-items-end">
+                    <div class="col-8">
+                        <input type="file" name="archivo" accept=".xlsx,.xls" class="form-control form-control-sm" required>
+                    </div>
+                    <div class="col-4">
+                        <button class="btn-empaque btn-sm w-100" type="submit">Subir</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <div class="col-12 col-md-4">
+            <div class="card p-3 h-100" style="border:1px solid #D5DEE2; border-radius:8px;">
+                <h6 class="fw-bold mb-2">Movimientos de entrada</h6>
+                <p class="small text-muted">Carga de entradas históricas con proveedor, cantidad, fecha y rechazos.</p>
+                <a class="btn-empaque-outline mb-2 d-block text-center"
+                   href="{{ url_for('empaque_carga_masiva_plantilla', tipo='entradas') }}">
+                    <i class="bi bi-download"></i> Descargar plantilla
+                </a>
+                <form method="post" action="{{ url_for('empaque_carga_masiva_movimientos') }}" enctype="multipart/form-data"
+                      class="row g-2 align-items-end">
+                    <input type="hidden" name="tipo" value="entradas">
+                    <div class="col-8">
+                        <input type="file" name="archivo" accept=".xlsx,.xls" class="form-control form-control-sm" required>
+                    </div>
+                    <div class="col-4">
+                        <button class="btn-empaque btn-sm w-100" type="submit">Subir</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <div class="col-12 col-md-4">
+            <div class="card p-3 h-100" style="border:1px solid #D5DEE2; border-radius:8px;">
+                <h6 class="fw-bold mb-2">Movimientos de salida</h6>
+                <p class="small text-muted">Salidas históricas con área, cantidad, fecha y (si aplica) lote.</p>
+                <a class="btn-empaque-outline mb-2 d-block text-center"
+                   href="{{ url_for('empaque_carga_masiva_plantilla', tipo='salidas') }}">
+                    <i class="bi bi-download"></i> Descargar plantilla
+                </a>
+                <form method="post" action="{{ url_for('empaque_carga_masiva_movimientos') }}" enctype="multipart/form-data"
+                      class="row g-2 align-items-end">
+                    <input type="hidden" name="tipo" value="salidas">
+                    <div class="col-8">
+                        <input type="file" name="archivo" accept=".xlsx,.xls" class="form-control form-control-sm" required>
+                    </div>
+                    <div class="col-4">
+                        <button class="btn-empaque btn-sm w-100" type="submit">Subir</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    <p class="small text-muted mt-3 mb-0">
+        Después de subir un archivo, verás una vista previa con las filas OK y las rechazadas,
+        y un reporte descargable de errores.
+    </p>
+
+    {# ===========================================================
+       Preview: Catálogo de artículos
+       =========================================================== #}
+    {% if carga_articulos %}
+    <div class="mt-4">
+        <hr class="section-divider">
+        <h6 class="fw-bold mb-2">
+            <i class="bi bi-box-seam"></i> Última carga: catálogo
+            <small class="text-muted">({{ carga_articulos.fecha }} · {{ carga_articulos.archivo }})</small>
+        </h6>
+        <div class="mb-2">
+            <span class="chip chip-success">{{ carga_articulos.correctas|length }} correctas</span>
+            <span class="chip chip-danger">{{ carga_articulos.rechazadas|length }} rechazadas</span>
+            {% if carga_articulos.rechazadas %}
+            <a class="btn-empaque-outline btn-sm ms-2"
+               href="{{ url_for('empaque_carga_masiva_articulos_rechazados') }}">
+                <i class="bi bi-file-earmark-excel"></i> Descargar rechazos
+            </a>
+            {% endif %}
+        </div>
+        {% if carga_articulos.correctas %}
+        <form method="post" action="{{ url_for('empaque_carga_masiva_articulos_aplicar') }}">
+            <div class="empaque-table-scroll">
+                <table class="empaque-table">
+                    <thead>
+                        <tr>
+                            <th style="width:40px;">
+                                <input type="checkbox" id="sel-all-art" checked>
+                            </th>
+                            <th>Fila</th><th>Código</th><th>Nombre</th>
+                            <th>Categoría</th><th>UM</th><th>Almacén</th>
+                            <th class="num">Mínimo</th><th class="num">Físico Dyn.</th><th>Activo</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for f in carga_articulos.correctas %}
+                        <tr>
+                            <td><input type="checkbox" name="aplicar" value="{{ loop.index0 }}" class="sel-art" checked></td>
+                            <td class="text-muted">{{ f.fila }}</td>
+                            <td><code>{{ f.codigo }}</code></td>
+                            <td>{{ f.nombre }}</td>
+                            <td>{{ f.categoria or '—' }}</td>
+                            <td>{{ f.UM }}</td>
+                            <td>{{ f.almacen }}</td>
+                            <td class="num">{{ f.stock_minimo or '—' }}</td>
+                            <td class="num">{{ f.fisico_dynamics or '—' }}</td>
+                            <td>
+                                {% if f.activo in (1, True, '1') %}
+                                    <span class="chip chip-success">Sí</span>
+                                {% else %}
+                                    <span class="chip chip-secondary">No</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="mt-3 d-flex justify-content-end gap-2 flex-wrap">
+                <button type="submit" class="btn-empaque">
+                    <i class="bi bi-check-circle"></i> Aplicar filas seleccionadas
+                </button>
+            </div>
+        </form>
+        <script>
+        (function(){
+            const sa = document.getElementById('sel-all-art');
+            const items = document.querySelectorAll('.sel-art');
+            if (sa) sa.addEventListener('change', () => items.forEach(i => i.checked = sa.checked));
+        })();
+        </script>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {# ===========================================================
+       Preview: movimientos (entradas/salidas)
+       =========================================================== #}
+    {% for tipo_label, clave, url_aplicar, url_rechazados, tabla_cols in [
+        ('entradas', carga_entradas,
+         url_for('empaque_carga_masiva_movimientos_aplicar', tipo='entradas'),
+         url_for('empaque_carga_masiva_movimientos_rechazados', tipo='entradas'),
+         [('fila','Fila'),('codigo','Código'),('cantidad','Cantidad'),('fecha','Fecha'),
+          ('proveedor','Proveedor'),('rechazos','Rechazos'),('comentario','Comentario')]),
+        ('salidas', carga_salidas,
+         url_for('empaque_carga_masiva_movimientos_aplicar', tipo='salidas'),
+         url_for('empaque_carga_masiva_movimientos_rechazados', tipo='salidas'),
+         [('fila','Fila'),('codigo','Código'),('cantidad','Cantidad'),('fecha','Fecha'),
+          ('area','Área'),('lote','Lote'),('comentario','Comentario')]),
+    ] %}
+    {% if clave %}
+    <div class="mt-4">
+        <hr class="section-divider">
+        <h6 class="fw-bold mb-2">
+            <i class="bi bi-arrow-down-up"></i> Última carga: {{ tipo_label }}
+            <small class="text-muted">({{ clave.fecha }} · {{ clave.archivo }})</small>
+        </h6>
+        <div class="mb-2">
+            <span class="chip chip-success">{{ clave.correctas|length }} correctas</span>
+            <span class="chip chip-danger">{{ clave.rechazadas|length }} rechazadas</span>
+            {% if clave.rechazadas %}
+            <a class="btn-empaque-outline btn-sm ms-2" href="{{ url_rechazados }}">
+                <i class="bi bi-file-earmark-excel"></i> Descargar rechazos
+            </a>
+            {% endif %}
+        </div>
+        {% if clave.correctas %}
+        <form method="post" action="{{ url_aplicar }}">
+            <div class="empaque-table-scroll">
+                <table class="empaque-table">
+                    <thead>
+                        <tr>
+                            <th style="width:40px;">
+                                <input type="checkbox" id="sel-all-mov-{{ tipo_label }}" checked>
+                            </th>
+                            {% for _k, etiq in tabla_cols %}
+                            <th{% if _k in ('cantidad','rechazos') %} class="num"{% endif %}>{{ etiq }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for f in clave.correctas %}
+                        <tr>
+                            <td><input type="checkbox" name="aplicar" value="{{ loop.index0 }}" class="sel-mov-{{ tipo_label }}" checked></td>
+                            {% for _k, _etiq in tabla_cols %}
+                            <td{% if _k in ('cantidad','rechazos') %} class="num"{% endif %}>{{ f[_k] or '—' }}</td>
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="mt-3 d-flex justify-content-end gap-2 flex-wrap">
+                <button type="submit" class="btn-empaque">
+                    <i class="bi bi-check-circle"></i> Aplicar filas seleccionadas
+                </button>
+            </div>
+        </form>
+        <script>
+        (function(){
+            const sa = document.getElementById('sel-all-mov-{{ tipo_label }}');
+            const items = document.querySelectorAll('.sel-mov-{{ tipo_label }}');
+            if (sa) sa.addEventListener('change', () => items.forEach(i => i.checked = sa.checked));
+        })();
+        </script>
+        {% endif %}
+        {% if clave.rechazadas %}
+        <details class="mt-3 small">
+            <summary class="text-muted fw-bold mb-2">Previsualizar {{ clave.rechazadas|length }} rechazadas</summary>
+            <div class="empaque-table-scroll mt-2">
+                <table class="empaque-table">
+                    <thead>
+                        <tr>
+                            {% for _k, etiq in tabla_cols %}
+                            <th>{{ etiq }}</th>
+                            {% endfor %}
+                            <th>Motivo</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for f in clave.rechazadas %}
+                        <tr class="table-danger">
+                            {% for _k, _etiq in tabla_cols %}
+                            <td>{{ f[_k] or '—' }}</td>
+                            {% endfor %}
+                            <td class="text-danger small">{{ f.error }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </details>
+        {% endif %}
+    </div>
+    {% endif %}
+    {% endfor %}
+</section>
+
+{# ===========================================================
+   Conciliación Dynamics
+   =========================================================== #}
+<section id="sec-conciliacion" class="section-anchor empaque-card">
+    <div class="card-title">Conciliación con Dynamics</div>
+    <p class="small text-muted">
+        Sube un Excel con las columnas <code>código</code> y <code>físico_dynamics</code>
+        para actualizar únicamente el campo de físico oficial.
+        <strong>Nunca se modifican movimientos.</strong>
+    </p>
+    <form method="post" action="{{ url_for('empaque_conciliacion') }}" enctype="multipart/form-data"
+          class="row g-3 align-items-end">
+        <div class="col-12 col-md-8">
+            <div class="row g-2">
+                <div class="col-6">
+                    <a class="btn-empaque-outline d-block text-center"
+                       href="{{ url_for('empaque_carga_masiva_plantilla', tipo='dynamics') }}">
+                        <i class="bi bi-download"></i> Descargar plantilla Dynamics
+                    </a>
+                </div>
+                <div class="col-6">
+                    <input type="file" name="archivo" accept=".xlsx,.xls" class="form-control">
+                </div>
+            </div>
+        </div>
+        <div class="col-12 col-md-4">
+            <button class="btn-empaque w-100" type="submit">Subir y revisar</button>
+        </div>
+    </form>
+    {% if session.get('empaque_conciliacion_rechazos') %}
+    <div class="mt-3">
+        <details>
+            <summary class="small fw-bold text-muted mb-1">Fila(s) ignorada(s) en la última conciliación ({{ session['empaque_conciliacion_rechazos']|length }})</summary>
+            <div class="mt-2 small">
+                <ul class="mb-0 ps-3">
+                {% for r in session['empaque_conciliacion_rechazos'] %}
+                    <li class="text-danger">{{ r }}</li>
+                {% endfor %}
+                </ul>
+            </div>
+        </details>
+    </div>
+    {% endif %}
+</section>
+
+{# ===========================================================
+   Ajustes
+   =========================================================== #}
+<section id="sec-ajustes" class="section-anchor empaque-card">
+    <div class="card-title">Ajustes de inventario</div>
+    <p class="small text-muted">
+        <strong>Única vía de corrección.</strong> Los movimientos nunca se editan ni se borran.
+        Un ajuste puede sumar o restar stock y <em>siempre deja bitácora con usuario, fecha y motivo</em>.
+    </p>
+    <form method="post" action="{{ url_for('empaque_registrar_ajuste') }}" class="row g-3">
+        <div class="col-12 col-md-5">
+            <label class="form-label">Artículo</label>
+            <select name="codigo" class="form-select" required>
+                <option value="">Selecciona artículo</option>
+                {% for a in articulos if a.activo %}
+                <option value="{{ a.codigo }}">{{ a.codigo }} · {{ a.nombre }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-6 col-md-2">
+            <label class="form-label">Cantidad</label>
+            <input type="number" step="0.001" name="cantidad" class="form-control"
+                   placeholder="+/-" required>
+        </div>
+        <div class="col-6 col-md-2">
+            <label class="form-label">Fecha</label>
+            <input type="date" name="fecha" class="form-control"
+                   value="{{ date.today().isoformat() }}" max="{{ date.today().isoformat() }}" required>
+        </div>
+        <div class="col-12 col-md-3 d-flex align-items-end">
+            <button class="btn-empaque w-100" type="submit">Registrar ajuste</button>
+        </div>
+        <div class="col-12">
+            <label class="form-label">Motivo</label>
+            <input type="text" name="motivo" class="form-control" maxlength="255" required
+                   placeholder="Describe por qué se ajusta (obligatorio).">
+        </div>
+        <div class="col-12">
+            <label class="form-label">Comentario adicional (opcional)</label>
+            <textarea class="form-control" name="comentario" rows="2" maxlength="500"></textarea>
+        </div>
+    </form>
+    {% if ultimos_ajustes %}
+    <div class="mt-4">
+        <div class="small text-muted fw-bold mb-2">Últimos 15 ajustes</div>
+        <div class="empaque-table-scroll">
+            <table class="empaque-table">
+                <thead>
+                    <tr><th>Fecha</th><th>Artículo</th><th class="num">Cantidad</th><th>Motivo</th><th>Usuario</th></tr>
+                </thead>
+                <tbody>
+                    {% for a in ultimos_ajustes %}
+                    <tr>
+                        <td>{{ a.fecha }}</td>
+                        <td>{{ a.articulo }}</td>
+                        <td class="num">
+                            {% if a.cantidad > 0 %}+{% endif %}{{ a.cantidad }}
+                        </td>
+                        <td class="small">{{ a.motivo }}</td>
+                        <td class="small">{{ a.usuario or '—' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+</section>
+
+{# ===========================================================
+   Exportación
+   =========================================================== #}
+<section id="sec-exportacion" class="section-anchor empaque-card">
+    <div class="card-title">Exportar a Excel</div>
+    <div class="row g-3">
+        <div class="col-12 col-md-6">
+            <div class="card p-3" style="border:1px solid #D5DEE2; border-radius:8px;">
+                <h6 class="fw-bold mb-2">Inventario actual</h6>
+                <p class="small text-muted">Código, nombre, categoría, UM, stock actual, físico Dynamics, diferencia, estado.</p>
+                <a class="btn-empaque d-block text-center"
+                   href="{{ url_for('empaque_exportar_inventario') }}">
+                    <i class="bi bi-file-earmark-spreadsheet"></i> Descargar inventario.xlsx
+                </a>
+            </div>
+        </div>
+        <div class="col-12 col-md-6">
+            <div class="card p-3" style="border:1px solid #D5DEE2; border-radius:8px;">
+                <h6 class="fw-bold mb-2">Movimientos (filtrables)</h6>
+                <p class="small text-muted">Entradas, salidas y ajustes con fecha, tipo, artículo, cantidad, detalle, usuario.</p>
+                <form method="get" action="{{ url_for('empaque_exportar_movimientos') }}" class="row g-2 align-items-end">
+                    <div class="col-6 col-md-4">
+                        <label class="form-label small">Desde</label>
+                        <input type="date" name="desde" class="form-control form-control-sm">
+                    </div>
+                    <div class="col-6 col-md-4">
+                        <label class="form-label small">Hasta</label>
+                        <input type="date" name="hasta" class="form-control form-control-sm" max="{{ date.today().isoformat() }}">
+                    </div>
+                    <div class="col-12 col-md-4">
+                        <label class="form-label small">Tipo</label>
+                        <select name="tipo" class="form-select form-select-sm">
+                            <option value="todos">Todos</option>
+                            <option value="entrada">Solo entradas</option>
+                            <option value="salida">Solo salidas</option>
+                            <option value="ajuste">Solo ajustes</option>
+                        </select>
+                    </div>
+                    <div class="col-12">
+                        <button class="btn-empaque w-100" type="submit">
+                            <i class="bi bi-file-earmark-spreadsheet"></i> Descargar movimientos.xlsx
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</section>
+
+{% endblock %}

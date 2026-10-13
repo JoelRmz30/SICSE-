@@ -3,14 +3,17 @@ import re
 import json
 import math
 import secrets
-import pandas as pd
+try:
+    import pandas as pd
+except Exception:
+    pd = None
 from io import BytesIO
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, send_file, session, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from decimal import Decimal
 from sqlalchemy import and_, or_, func
 
@@ -277,8 +280,10 @@ class Embarque(db.Model):
     num_orden = db.Column(db.String(30), nullable=False)
     ticket = db.Column(db.String(30), nullable=True, unique=True)
     packing = db.Column(db.String(30), nullable=True, unique=True)
-    id_producto = db.Column(db.Integer, db.ForeignKey('productos_embarque.id_producto'), nullable=False)
-    id_cliente = db.Column(db.Integer, db.ForeignKey('clientes.id_cliente'), nullable=False)
+    id_producto = db.Column(db.Integer, db.ForeignKey('productos_embarque.id_producto'), nullable=True)
+    id_cliente = db.Column(db.Integer, db.ForeignKey('clientes.id_cliente'), nullable=True)
+    producto_texto = db.Column(db.String(200), nullable=True)
+    cliente_texto = db.Column(db.String(200), nullable=True)
     tipo_unidad = db.Column(db.Enum('pipa_jumbo', 'pipa_chica', 'isotanque', 'flexitanque',
                                     'caja_refrigerada', 'caja_seca', 'trailer', 'tambores'),
                             nullable=False)
@@ -362,12 +367,12 @@ class EmbarqueTiempos(db.Model):
             ('documentacion', self.documentacion, 'salida', self.salida),
         ]
         nombres = {
-            'llegada': 'Llegada',
-            'entrada': 'Entrada',
-            'pesado_inicial': 'Pesado inicial',
-            'pesaje_salida': 'Pesaje de salida',
-            'documentacion': 'Documentación',
-            'salida': 'Salida',
+            'llegada': 'Fecha y hora Registro llegada planta',
+            'entrada': 'Fecha y hora de entrada a planta',
+            'pesado_inicial': 'Pesado Inicial de la Unidad',
+            'pesaje_salida': 'Pesaje de Salida',
+            'documentacion': 'Fecha y hora de documentación',
+            'salida': 'Fecha y hora de salida de Planta',
         }
         for a_n, a_v, b_n, b_v in pares:
             if a_v and b_v and a_v > b_v:
@@ -465,6 +470,323 @@ class ParametroSistema(db.Model):
 # ===== FIN MODELOS EMBARQUES =========================================
 # =====================================================================
 
+
+# =====================================================================
+# ===== MÓDULO EMPAQUE - CATÁLOGOS ADMINISTRABLES =====================
+# =====================================================================
+# Todas las listas cerradas (categorías, áreas, proveedores) son tablas
+# administrables por el administrador para que el usuario las llene.
+# Nunca se borran físicamente; se desactivan con activo=False.
+# =====================================================================
+
+
+class EmpaqueCategoria(db.Model):
+    """
+    Catálogo de categorías de artículos de empaque (Ej: Contenedor, Tarima,
+    Bolsa, Etiqueta, Cierre, Esencia, Otros, etc.).
+
+    - El usuario administrador crea/edita/desactiva desde la pantalla.
+    - nombre UNIQUE (no se permite duplicar la misma categoría).
+    - Nunca se elimina; se desactiva.
+    """
+    __tablename__ = 'empaque_categorias'
+    id_categoria = db.Column(db.Integer, primary_key=True)
+    nombre = db.Column(db.String(100), nullable=False, unique=True)
+    activo = db.Column(db.Boolean, default=True)
+    creado_en = db.Column(db.DateTime, default=datetime.utcnow)
+    actualizado_en = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class EmpaqueArea(db.Model):
+    """
+    Catálogo de áreas solicitantes de material de empaque.
+
+    Ejemplos: Pulpa, Producción, Calidad, Llenado, Centrifugado,
+              Evaporador, Embarques, Otra.
+
+    - El nombre "Pulpa" tiene significado semántico en reglas de negocio:
+      una salida con área Pulpa exige un lote de pulpa asociado.
+    - nombre UNIQUE.
+    """
+    __tablename__ = 'empaque_areas'
+    id_area = db.Column(db.Integer, primary_key=True)
+    nombre = db.Column(db.String(100), nullable=False, unique=True)
+    activo = db.Column(db.Boolean, default=True)
+    creado_en = db.Column(db.DateTime, default=datetime.utcnow)
+    actualizado_en = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class EmpaqueProveedor(db.Model):
+    """
+    Catálogo de proveedores de material de empaque. Usado en Entradas.
+
+    - nombre UNIQUE.
+    - Nunca se elimina; se desactiva.
+    """
+    __tablename__ = 'empaque_proveedores'
+    id_proveedor = db.Column(db.Integer, primary_key=True)
+    nombre = db.Column(db.String(200), nullable=False, unique=True)
+    activo = db.Column(db.Boolean, default=True)
+    creado_en = db.Column(db.DateTime, default=datetime.utcnow)
+    actualizado_en = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# =====================================================================
+# ===== MÓDULO EMPAQUE - ARTÍCULO =====================================
+# =====================================================================
+# Regla fundamental: nombre y unidad de medida VIVEN SÓLO AQUÍ.
+# Los movimientos (entrada/salida/ajuste) sólo guardan la FK al artículo;
+# NUNCA duplican nombre ni unidad.
+# =====================================================================
+
+
+class EmpaqueArticulo(db.Model):
+    """
+    Catálogo maestro de artículos de empaque.
+
+    - codigo es la PK natural del negocio (Ej: IN00120071). Único.
+    - um (unidad de medida) es ENUM cerrada: 'Pz' o 'Kg'. No es adminable
+      porque afecta reglas de validación de cantidad (entera vs. decimal).
+    - stock_minimo y fisico_dynamics son opcionales (NULLABLE).
+    - No se elimina físicamente si tiene movimientos asociados (se inactiva).
+    """
+    __tablename__ = 'empaque_articulos'
+    codigo = db.Column(db.String(20), primary_key=True)
+    nombre = db.Column(db.String(255), nullable=False, unique=True)
+    id_categoria = db.Column(db.Integer, db.ForeignKey('empaque_categorias.id_categoria'), nullable=True)
+    um = db.Column(db.Enum('Pz', 'Kg'), nullable=False)
+    almacen = db.Column(db.String(20), nullable=False, default='CP005')
+    stock_minimo = db.Column(db.Numeric(14, 3), nullable=True)
+    fisico_dynamics = db.Column(db.Numeric(14, 3), nullable=True)
+    activo = db.Column(db.Boolean, default=True)
+    creado_en = db.Column(db.DateTime, default=datetime.utcnow)
+    actualizado_en = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    categoria = db.relationship('EmpaqueCategoria')
+
+    # ------------------------------------------------------------------
+    # Campos calculados: stock, diferencia y estado.
+    # Regla de arquitectura: NUNCA se guardan; siempre se derivan al vuelo
+    # sumando entradas - salidas + ajustes.
+    # ------------------------------------------------------------------
+
+    @property
+    def stock_actual(self):
+        """
+        Calcula el stock actual del artículo como:
+        SUM(entradas.cantidad - entradas.rechazos) - SUM(salidas.cantidad) + SUM(ajustes.cantidad)
+
+        Devuelve un Decimal. 0 si no hay movimientos.
+        """
+        entradas = (
+            db.session.query(db.func.coalesce(
+                db.func.sum(EmpaqueEntrada.cantidad - db.func.coalesce(EmpaqueEntrada.rechazos, 0)),
+                0
+            ))
+            .filter(EmpaqueEntrada.codigo == self.codigo)
+            .scalar()
+        )
+        salidas = (
+            db.session.query(db.func.coalesce(
+                db.func.sum(EmpaqueSalida.cantidad),
+                0
+            ))
+            .filter(EmpaqueSalida.codigo == self.codigo)
+            .scalar()
+        )
+        ajustes = (
+            db.session.query(db.func.coalesce(
+                db.func.sum(EmpaqueAjuste.cantidad),
+                0
+            ))
+            .filter(EmpaqueAjuste.codigo == self.codigo)
+            .scalar()
+        )
+        return (Decimal(str(entradas or 0))
+                - Decimal(str(salidas or 0))
+                + Decimal(str(ajustes or 0)))
+
+    @property
+    def diferencia(self):
+        """
+        Diferencia entre stock actual (control interno) y físico de Dynamics.
+        Devuelve None si fisico_dynamics es NULL (no hay dato oficial).
+        """
+        if self.fisico_dynamics is None:
+            return None
+        return self.stock_actual - Decimal(str(self.fisico_dynamics))
+
+    @property
+    def estado_articulo(self):
+        """
+        Calcula el estado del artículo en el ORDEN ESTRICTO del requerimiento.
+        El orden importa: una vez que cae en un estado no se evalúan los demás.
+
+        Prioridad de mayor a menor:
+        1) fisico < 0                -> 'negativo_dynamics'   (rojo)
+        2) stock <= 0                -> 'sin_stock'           (rojo)
+        3) stock < stock_minimo      -> 'bajo_minimo'         (ámbar)
+        4) fisico IS NULL            -> 'sin_dynamics'        (informativo)
+        5) stock == fisico           -> 'cuadra'              (verde)
+        6) else                      -> 'con_diferencia'      (ámbar)
+
+        Si la condición 3 y 6 son verdaderas al mismo tiempo, se devuelve
+        'bajo_minimo' por ser la regla de mayor prioridad.
+
+        Devuelve: (clave, etiqueta_visible, clase_color)
+        """
+        stock = self.stock_actual
+        fisico = self.fisico_dynamics
+        minimo = self.stock_minimo
+
+        # 1. Negativo en Dynamics (rojo)
+        if fisico is not None and Decimal(str(fisico)) < 0:
+            return ('negativo_dynamics', 'Negativo en Dynamics', 'danger')
+
+        # 2. Sin stock (rojo)
+        if stock <= 0:
+            return ('sin_stock', 'Sin stock', 'danger')
+
+        # 3. Bajo mínimo (ámbar)
+        if minimo is not None and stock < Decimal(str(minimo)):
+            return ('bajo_minimo', 'Bajo mínimo', 'warning')
+
+        # 4. Sin dato de Dynamics (informativo)
+        if fisico is None:
+            return ('sin_dynamics', 'Sin dato Dynamics', 'info')
+
+        # 5. Cuadra (verde)
+        if stock == Decimal(str(fisico)):
+            return ('cuadra', 'Cuadra', 'success')
+
+        # 6. Con diferencia (ámbar)
+        return ('con_diferencia', 'Con diferencia', 'warning')
+
+
+# =====================================================================
+# ===== MÓDULO EMPAQUE - MOVIMIENTOS ==================================
+# =====================================================================
+# Invariantes clave:
+# - Un movimiento (entrada/salida/ajuste) NUNCA se edita ni se borra.
+# - Si hay un error, se registra un Ajuste con motivo.
+# - El usuario y la fecha de creación son auditoría inmutable.
+# =====================================================================
+
+
+class EmpaqueEntrada(db.Model):
+    """
+    Entrada de material de empaque al almacén.
+
+    - cantidad > 0 (validado en servidor).
+    - rechazos: piezas devueltas al proveedor (default 0). Los rechazos se
+      descuentan del cálculo de stock (entrada neta = cantidad - rechazos).
+    - FK a EmpaqueProveedor (obligatorio).
+    - creado_por -> Usuario.id_usuario (auditoría).
+    """
+    __tablename__ = 'empaque_entradas'
+    id_entrada = db.Column(db.Integer, primary_key=True)
+    codigo = db.Column(db.String(20), db.ForeignKey('empaque_articulos.codigo'), nullable=False)
+    cantidad = db.Column(db.Numeric(14, 3), nullable=False)
+    fecha = db.Column(db.Date, nullable=False)
+    id_proveedor = db.Column(db.Integer, db.ForeignKey('empaque_proveedores.id_proveedor'), nullable=False)
+    rechazos = db.Column(db.Numeric(14, 3), nullable=False, default=0)
+    comentario = db.Column(db.Text, nullable=True)
+    creado_por = db.Column(db.Integer, db.ForeignKey('usuarios.id_usuario'), nullable=False)
+    creado_en = db.Column(db.DateTime, default=datetime.utcnow)
+
+    articulo = db.relationship('EmpaqueArticulo')
+    proveedor = db.relationship('EmpaqueProveedor')
+    usuario = db.relationship('Usuario', foreign_keys=[creado_por])
+
+
+class EmpaqueSalida(db.Model):
+    """
+    Salida de material de empaque desde el almacén.
+
+    Reglas:
+    - cantidad > 0.
+    - No puede dejar el stock en negativo (validado en transacción).
+    - FK a EmpaqueArea (obligatorio).
+    - lote_id es OPCIONAL EXCEPTO cuando el área es Pulpa. La comparación
+      se hace por nombre del área (columna EmpaqueArea.nombre == 'Pulpa')
+      porque es un catálogo editable por el usuario (no hay id fijo).
+    - lote_id apunta a lotes.id_lote existente de SICSE (no duplica datos).
+    """
+    __tablename__ = 'empaque_salidas'
+    id_salida = db.Column(db.Integer, primary_key=True)
+    codigo = db.Column(db.String(20), db.ForeignKey('empaque_articulos.codigo'), nullable=False)
+    cantidad = db.Column(db.Numeric(14, 3), nullable=False)
+    fecha = db.Column(db.Date, nullable=False)
+    id_area = db.Column(db.Integer, db.ForeignKey('empaque_areas.id_area'), nullable=False)
+    id_lote = db.Column(db.Integer, db.ForeignKey('lotes.id_lote'), nullable=True)
+    comentario = db.Column(db.Text, nullable=True)
+    creado_por = db.Column(db.Integer, db.ForeignKey('usuarios.id_usuario'), nullable=False)
+    creado_en = db.Column(db.DateTime, default=datetime.utcnow)
+
+    articulo = db.relationship('EmpaqueArticulo')
+    area = db.relationship('EmpaqueArea')
+    lote = db.relationship('Lote')
+    usuario = db.relationship('Usuario', foreign_keys=[creado_por])
+
+
+class EmpaqueAjuste(db.Model):
+    """
+    Ajuste de inventario de empaque. Única forma de corregir.
+
+    - cantidad puede ser positiva (agrega stock) o negativa (resta stock).
+    - motivo es OBLIGATORIO (por qué se ajusta).
+    - usuario y fecha de auditoría inmutables.
+    - solo lo registra el rol 'administrador'.
+    """
+    __tablename__ = 'empaque_ajustes'
+    id_ajuste = db.Column(db.Integer, primary_key=True)
+    codigo = db.Column(db.String(20), db.ForeignKey('empaque_articulos.codigo'), nullable=False)
+    cantidad = db.Column(db.Numeric(14, 3), nullable=False)
+    fecha = db.Column(db.Date, nullable=False)
+    motivo = db.Column(db.String(255), nullable=False)
+    creado_por = db.Column(db.Integer, db.ForeignKey('usuarios.id_usuario'), nullable=False)
+    creado_en = db.Column(db.DateTime, default=datetime.utcnow)
+
+    articulo = db.relationship('EmpaqueArticulo')
+    usuario = db.relationship('Usuario', foreign_keys=[creado_por])
+
+
+# =====================================================================
+# ===== MÓDULO EMPAQUE - KIT POR LOTE =================================
+# =====================================================================
+
+
+class EmpaqueKit(db.Model):
+    """
+    Kit estándar sugerido de consumo por lote de pulpa (o por área).
+
+    - id_area: generalmente el área Pulpa, pero se deja abierto a otras
+      áreas si el negocio lo requiere.
+    - cantidad_sugerida > 0.
+    - El administrador configura las filas desde la pantalla Catálogo.
+    - Un registro por (id_area, codigo); UNIQUE.
+    """
+    __tablename__ = 'empaque_kits'
+    id_kit = db.Column(db.Integer, primary_key=True)
+    id_area = db.Column(db.Integer, db.ForeignKey('empaque_areas.id_area'), nullable=False)
+    codigo = db.Column(db.String(20), db.ForeignKey('empaque_articulos.codigo'), nullable=False)
+    cantidad_sugerida = db.Column(db.Numeric(14, 3), nullable=False)
+    creado_en = db.Column(db.DateTime, default=datetime.utcnow)
+    actualizado_en = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('id_area', 'codigo', name='uq_empaque_kit_area_codigo'),
+    )
+
+    area = db.relationship('EmpaqueArea')
+    articulo = db.relationship('EmpaqueArticulo')
+
+
+# =====================================================================
+# ===== FIN MODELOS EMPAQUE ===========================================
+# =====================================================================
+
+
 @login_manager.user_loader
 def load_user(user_id):
     return Usuario.query.get(int(user_id))
@@ -501,10 +823,16 @@ def _parse_json_dict(value):
 def inject_helpers():
     """
     Expone helpers al motor de plantillas Jinja2 para todas las vistas.
-    - _is_guest: permite ocultar botones de escritura al rol invitado.
+    - _is_guest: oculta botones de escritura al rol invitado.
+    - empaque_format_num: formatea cantidades por UM (Pz/Kg) en templates.
+    - empaque_estado_desde_valores: determina badge de estado con valores batch.
     """
     return {
         '_is_guest': _is_guest,
+        'empaque_format_num': _empaque_format_numero,
+        'empaque_estado_desde_valores': _empaque_estado_desde_valores,
+        'date': date,
+        'today': date.today,
     }
 
 RUTAS_PERMITIDAS_INVITADO_GET = frozenset({
@@ -514,6 +842,9 @@ RUTAS_PERMITIDAS_INVITADO_GET = frozenset({
     # Módulo embarques: solo lectura (listado, detalle, exportar, cuadre, API lotes)
     'listar_embarques', 'detalle_embarque', 'exportar_embarques',
     'cuadre_embarques', 'api_embarques_lotes',
+    # Módulo empaque: solo lectura (rol Consulta -> invitado)
+    'empaque_resumen', 'empaque_inventario',
+    'empaque_api_articulo_detalle',
 })
 
 RUTAS_NO_PERMITIDAS_INVITADO = frozenset({
@@ -524,7 +855,235 @@ RUTAS_NO_PERMITIDAS_INVITADO = frozenset({
     # Módulo embarques: escritura está bloqueada además por _block_guest_writes
     'nuevo_embarque', 'editar_embarque', 'cancelar_embarque',
     'gestionar_catalogo',
+    # Módulo empaque: captura y administración
+    'empaque_movimiento', 'empaque_registrar_kit',
+    'empaque_registrar_ajuste',
+    'empaque_catalogo', 'empaque_catalogo_guardar_articulo',
+    'empaque_catalogo_toggle_articulo',
+    'empaque_catalogo_guardar_categoria',
+    'empaque_catalogo_guardar_area',
+    'empaque_catalogo_guardar_proveedor',
+    'empaque_catalogo_guardar_kit',
+    'empaque_catalogo_eliminar_kit',
+    'empaque_carga_masiva_plantilla',
+    'empaque_carga_masiva_articulos',
+    'empaque_carga_masiva_movimientos',
+    'empaque_conciliacion',
+    'empaque_exportar_inventario',
+    'empaque_exportar_movimientos',
 })
+
+
+# =====================================================================
+# ===== HELPERS MÓDULO EMPAQUE ========================================
+# =====================================================================
+# Funciones reutilizables que encapsulan reglas de negocio.
+# Separadas de las rutas para facilitar testing y mantenimiento.
+# =====================================================================
+
+
+def _empaque_deny_if_not_admin():
+    """
+    Devuelve True y lanza flash si el usuario NO es administrador.
+    Usado en rutas del Catálogo, Ajustes, Conciliación y Cargas masivas.
+    """
+    if not current_user.is_authenticated:
+        flash('Sesión expirada. Inicia sesión nuevamente.', 'warning')
+        return True
+    if (current_user.rol or '').strip().lower() != 'administrador':
+        flash('Acceso denegado: solo el rol Administrador puede realizar esta acción.', 'danger')
+        return True
+    return False
+
+
+def _empaque_deny_if_guest_or_consulta():
+    """
+    Devuelve True si el usuario no puede escribir (invitado / consulta).
+    Usado para rutas de Entrada / Salida (capturista o admin sí pueden).
+    """
+    return _deny_if_guest()
+
+
+def _validar_cantidad_por_um(raw, um, allow_negative=False):
+    """
+    Valida y parsea una cantidad para la UM indicada (Pz entera, Kg hasta 3 decimales).
+
+    Parámetros:
+        raw: str / Decimal / number (acepta entrada directa de formulario).
+        um: 'Pz' o 'Kg'.
+        allow_negative: si True, admite signo negativo (por ejemplo, ajustes).
+
+    Devuelve:
+        (ok: bool, cantidad_decimal_o_None, mensaje_error: str)
+    """
+    if raw is None:
+        return False, None, 'Cantidad faltante.'
+    s = str(raw).strip()
+    if s == '':
+        return False, None, 'Cantidad faltante.'
+    try:
+        cantidad = _parse_decimal(s)
+    except Exception:
+        return False, None, 'Cantidad no es un número válido.'
+    if cantidad is None:
+        return False, None, 'Cantidad no es un número válido.'
+    if not allow_negative and cantidad <= 0:
+        return False, None, 'La cantidad debe ser mayor a cero.'
+    if allow_negative and cantidad == 0:
+        return False, None, 'La cantidad debe ser distinta de cero.'
+    um_ = (um or '').strip()
+    if um_ == 'Pz':
+        if cantidad != cantidad.to_integral_value():
+            return False, None, 'Para unidad Pz la cantidad debe ser entera (sin decimales).'
+    elif um_ == 'Kg':
+        signo, digitos, exp = cantidad.as_tuple()
+        if exp is not None and exp < -3:
+            return False, None, 'Para unidad Kg se admiten máximo 3 decimales.'
+    else:
+        return False, None, f'Unidad de medida desconocida: {um}.'
+    return True, cantidad, ''
+
+
+def _empaque_validar_cantidad_por_um(cantidad, um):
+    """Wrapper legacy. Devuelve (ok, mensaje)."""
+    ok, _val, msg = _validar_cantidad_por_um(cantidad, um, allow_negative=False)
+    return ok, msg
+
+
+def _empaque_calcular_stock_batch(codigos):
+    """
+    Calcula stock actual para UNA LISTA de códigos en 3 consultas SQL
+    (una por tipo de movimiento) en lugar de 3 por cada artículo.
+    Optimización crucial para listados con > 50 artículos.
+
+    Parámetros:
+        codigos: list[str] de códigos de artículo.
+
+    Devuelve:
+        dict {codigo: Decimal_stock_actual}
+    """
+    if not codigos:
+        return {}
+
+    entrada_neta = dict(
+        db.session.query(
+            EmpaqueEntrada.codigo,
+            db.func.coalesce(
+                db.func.sum(EmpaqueEntrada.cantidad - db.func.coalesce(EmpaqueEntrada.rechazos, 0)),
+                0
+            )
+        )
+        .filter(EmpaqueEntrada.codigo.in_(codigos))
+        .group_by(EmpaqueEntrada.codigo)
+        .all()
+    )
+    salidas_total = dict(
+        db.session.query(
+            EmpaqueSalida.codigo,
+            db.func.coalesce(db.func.sum(EmpaqueSalida.cantidad), 0)
+        )
+        .filter(EmpaqueSalida.codigo.in_(codigos))
+        .group_by(EmpaqueSalida.codigo)
+        .all()
+    )
+    ajustes_total = dict(
+        db.session.query(
+            EmpaqueAjuste.codigo,
+            db.func.coalesce(db.func.sum(EmpaqueAjuste.cantidad), 0)
+        )
+        .filter(EmpaqueAjuste.codigo.in_(codigos))
+        .group_by(EmpaqueAjuste.codigo)
+        .all()
+    )
+
+    resultado = {}
+    for c in codigos:
+        e = Decimal(str(entrada_neta.get(c, 0)))
+        s = Decimal(str(salidas_total.get(c, 0)))
+        a = Decimal(str(ajustes_total.get(c, 0)))
+        resultado[c] = e - s + a
+    return resultado
+
+
+def _empaque_estado_desde_valores(stock_actual, fisico_dynamics, stock_minimo):
+    """
+    Calcula el estado de un artículo a partir de sus valores numéricos.
+    MISMA REGLA que EmpaqueArticulo.estado_articulo pero permite ser usada
+    con el stock calculado en batch (evita N+1 queries en listados).
+
+    Devuelve: (clave, etiqueta, clase_color)
+    """
+    stock = Decimal(str(stock_actual)) if stock_actual is not None else Decimal('0')
+    minimo = Decimal(str(stock_minimo)) if stock_minimo is not None else None
+    fisico = Decimal(str(fisico_dynamics)) if fisico_dynamics is not None else None
+
+    # 1. Negativo en Dynamics (rojo)
+    if fisico is not None and fisico < 0:
+        return ('negativo_dynamics', 'Negativo en Dynamics', 'danger')
+
+    # 2. Sin stock (rojo)
+    if stock <= 0:
+        return ('sin_stock', 'Sin stock', 'danger')
+
+    # 3. Bajo mínimo (ámbar)
+    if minimo is not None and stock < minimo:
+        return ('bajo_minimo', 'Bajo mínimo', 'warning')
+
+    # 4. Sin dato Dynamics (informativo)
+    if fisico is None:
+        return ('sin_dynamics', 'Sin dato Dynamics', 'info')
+
+    # 5. Cuadra (verde)
+    if stock == fisico:
+        return ('cuadra', 'Cuadra', 'success')
+
+    # 6. Con diferencia (ámbar)
+    return ('con_diferencia', 'Con diferencia', 'warning')
+
+
+def _empaque_format_numero(valor, um=None):
+    """
+    Formatea un número para UI según la unidad de medida.
+    - Pz: sin decimales.
+    - Kg: hasta 3 decimales (mostrando los no-cero).
+    - Otros: 2 decimales por defecto.
+
+    Devuelve str con separador de miles.
+    """
+    if valor is None:
+        return ''
+    try:
+        d = Decimal(str(valor))
+    except Exception:
+        return str(valor)
+    if um == 'Pz':
+        return f'{int(d):,}'
+    if um == 'Kg':
+        s = f'{d:,.3f}'.rstrip('0').rstrip('.')
+        return s if s else '0'
+    return f'{d:,.2f}'
+
+
+def _empaque_tiene_movimientos(codigo):
+    """
+    Devuelve True si el artículo tiene al menos un movimiento
+    (entrada, salida o ajuste). Usado para prohibir ELIMINACIÓN física;
+    solo se puede INACTIVAR.
+    """
+    if not codigo:
+        return False
+    if EmpaqueEntrada.query.filter_by(codigo=codigo).first():
+        return True
+    if EmpaqueSalida.query.filter_by(codigo=codigo).first():
+        return True
+    if EmpaqueAjuste.query.filter_by(codigo=codigo).first():
+        return True
+    return False
+
+
+# =====================================================================
+# ===== FIN HELPERS EMPAQUE ===========================================
+# =====================================================================
 
 @app.before_request
 def _block_guest_writes():
@@ -1383,6 +1942,14 @@ CATALOGOS_EMBARQUES = {
              ('enum', ['KG','TAZ'], ['KG','TAZ']), True),
         ],
     },
+    'clientes': {
+        'model': Cliente,
+        'nombre_visible': 'Clientes',
+        'campos': [
+            ('nombre_cliente', 'Nombre del cliente', 'text', True),
+            ('codigo', 'Código (opcional)', 'text', False),
+        ],
+    },
     'transportistas': {
         'model': Transportista,
         'nombre_visible': 'Transportistas',
@@ -1410,13 +1977,6 @@ CATALOGOS_EMBARQUES = {
     'lavaderos': {
         'model': Lavadero,
         'nombre_visible': 'Lavaderos',
-        'campos': [
-            ('nombre', 'Nombre', 'text', True),
-        ],
-    },
-    'facilitadores': {
-        'model': Facilitador,
-        'nombre_visible': 'Facilitadores',
         'campos': [
             ('nombre', 'Nombre', 'text', True),
         ],
@@ -1579,21 +2139,21 @@ def listar_embarques():
         'texto_libre': texto_libre,
     }
 
-    # --- Tarjetas resumen (aplican filtros de fecha) ---
-    hoy = datetime.today().date()
-    inicio_mes = hoy.replace(day=1)
-    q_mes = Embarque.query.filter(
-        Embarque.estatus != 'cancelado',
-        Embarque.fecha_embarque >= inicio_mes,
-    )
-    total_mes = q_mes.count()
-    embarques_mes = q_mes.options(db.joinedload(Embarque.lotes)).all()
+    # --- Tarjetas resumen (respetan los filtros de fecha del usuario) ---
+    q_resumen = Embarque.query.filter(Embarque.estatus != 'cancelado')
+    if fecha_desde:
+        q_resumen = q_resumen.filter(Embarque.fecha_embarque >= fecha_desde)
+    if fecha_hasta:
+        q_resumen = q_resumen.filter(Embarque.fecha_embarque <= fecha_hasta)
+
+    total_mes = q_resumen.count()
+    embarques_mes = q_resumen.options(db.joinedload(Embarque.lotes)).all()
     kg_embarcados = Decimal('0')
     for emb in embarques_mes:
         if emb.producto and emb.producto.unidad_medida == 'KG':
             kg_embarcados += emb.cantidad_total
 
-    # Tiempo medio en planta (solo embarques con tiempos completos en el mes)
+    # Tiempo medio en planta (solo embarques con tiempos completos dentro de los filtros)
     tiempos_tds = []
     for emb in embarques_mes:
         if emb.tiempos and emb.tiempos.tiempo_en_planta:
@@ -1656,8 +2216,198 @@ def _cargar_catalogos_formulario():
         'tractores': UnidadTransporte.query.filter_by(activo=True, tipo='tractor').order_by(UnidadTransporte.placa).all(),
         'remolques': UnidadTransporte.query.filter_by(activo=True, tipo='remolque').order_by(UnidadTransporte.placa).all(),
         'lavaderos': Lavadero.query.filter_by(activo=True).order_by(Lavadero.nombre).all(),
-        'facilitadores': Facilitador.query.filter_by(activo=True).order_by(Facilitador.nombre).all(),
     }
+
+
+def _resolver_unidad_transporte(raw_id, placa_nueva, tipo):
+    """
+    Resuelve la FK id_unidad para tractor / remolque:
+      - Si raw_id es entero > 0: lo devuelve directo (unidad existente seleccionada).
+      - Si raw_id == '__nuevo__' y viene placa_nueva no vacía:
+          * busca unidad existente con esa placa (case insensitive), si existe devuelve su id.
+          * si no existe: crea UnidadTransporte(tipo=tipo, placa=placa_nueva, activo=True),
+            la agrega a la sesión (no hace commit, depende de la transacción exterior) y
+            devuelve su id después de flush.
+      - De lo contrario devuelve None.
+
+    Devuelve: (id_unidad:int|None, mensaje_error:str|None)
+    """
+    if raw_id is None:
+        return None, None
+    raw_id_str = str(raw_id).strip()
+    if raw_id_str == '' or raw_id_str.lower() == 'none':
+        return None, None
+    if raw_id_str == '__nuevo__':
+        placa = _validar_y_normalizar_texto(placa_nueva, mayusculas=True)
+        if not placa:
+            return None, 'Placa para nueva unidad {} es obligatoria al elegir "Agregar nuevo".'.format(tipo)
+        if len(placa) > 30:
+            return None, 'La placa excede 30 caracteres.'
+        existente = UnidadTransporte.query.filter(
+            func.upper(UnidadTransporte.placa) == placa.upper()
+        ).first()
+        if existente:
+            if existente.tipo != tipo:
+                return None, (
+                    'Ya existe una unidad con placa {} pero es tipo {}. '
+                    'No se puede reutilizar como {}.'
+                ).format(placa, existente.tipo, tipo)
+            return existente.id_unidad, None
+        nueva = UnidadTransporte(placa=placa, tipo=tipo, activo=True)
+        db.session.add(nueva)
+        db.session.flush()
+        return nueva.id_unidad, None
+    id_int = _parse_int_or_none(raw_id_str)
+    if id_int:
+        return id_int, None
+    return None, None
+
+
+def _resolver_producto(raw_id, descripcion_nueva, tipo_nuevo, um_nuevo):
+    """
+    Resuelve id_producto:
+      - entero > 0: devuelve el id.
+      - '__nuevo__' con descripción: busca por descripción (case insensitive),
+        si existe devuelve su id; si no, crea ProductoEmbarque con item
+        auto-generado, activo=True, y flush.
+    Devuelve (id_producto:int|None, error:str|None).
+    """
+    if raw_id is None:
+        return None, None
+    raw = str(raw_id).strip()
+    if raw == '' or raw.lower() == 'none':
+        return None, None
+    if raw == '__nuevo__':
+        descripcion = _validar_y_normalizar_texto(descripcion_nueva, mayusculas=False)
+        if not descripcion:
+            return None, 'La descripción del nuevo producto es obligatoria.'
+        if len(descripcion) > 255:
+            return None, 'La descripción del producto excede 255 caracteres.'
+        tipo = (tipo_nuevo or 'concentrado').strip()
+        if tipo not in ('concentrado', 'pulpa', 'colateral'):
+            tipo = 'concentrado'
+        um = (um_nuevo or 'KG').strip()
+        if um not in ('KG', 'TAZ'):
+            um = 'KG'
+        existente = ProductoEmbarque.query.filter(
+            db.func.upper(ProductoEmbarque.descripcion) == descripcion.upper()
+        ).first()
+        if existente:
+            return existente.id_producto, None
+        # Generar item único automáticamente
+        import uuid
+        item = 'AUTO-' + uuid.uuid4().hex[:8].upper()
+        while ProductoEmbarque.query.filter_by(item=item).first():
+            item = 'AUTO-' + uuid.uuid4().hex[:8].upper()
+        nuevo = ProductoEmbarque(
+            item=item, descripcion=descripcion, tipo=tipo,
+            unidad_medida=um, activo=True)
+        db.session.add(nuevo)
+        db.session.flush()
+        return nuevo.id_producto, None
+    id_int = _parse_int_or_none(raw)
+    if id_int:
+        return id_int, None
+    return None, None
+
+
+def _resolver_cliente(raw_id, nombre_nuevo):
+    """
+    Resuelve id_cliente:
+      - entero > 0: devuelve el id.
+      - '__nuevo__' con nombre: busca por nombre (case insensitive), si existe
+        devuelve su id; si no, crea Cliente(nombre_cliente) y flush.
+    Devuelve (id_cliente:int|None, error:str|None).
+    """
+    if raw_id is None:
+        return None, None
+    raw = str(raw_id).strip()
+    if raw == '' or raw.lower() == 'none':
+        return None, None
+    if raw == '__nuevo__':
+        nombre = _validar_y_normalizar_texto(nombre_nuevo, mayusculas=False)
+        if not nombre:
+            return None, 'El nombre del nuevo cliente es obligatorio.'
+        if len(nombre) > 100:
+            return None, 'El nombre del cliente excede 100 caracteres.'
+        existente = Cliente.query.filter(
+            db.func.upper(Cliente.nombre_cliente) == nombre.upper()
+        ).first()
+        if existente:
+            return existente.id_cliente, None
+        nuevo = Cliente(nombre_cliente=nombre)
+        db.session.add(nuevo)
+        db.session.flush()
+        return nuevo.id_cliente, None
+    id_int = _parse_int_or_none(raw)
+    if id_int:
+        return id_int, None
+    return None, None
+
+
+def _resolver_transportista(raw_id, nombre_nuevo):
+    """
+    Resuelve id_transportista:
+      - entero > 0: devuelve el id.
+      - '__nuevo__' con nombre: busca por nombre (case insensitive), si existe
+        devuelve su id; si no, crea Transportista(nombre, activo=True) y flush.
+    Devuelve (id_transportista:int|None, error:str|None).
+    """
+    if raw_id is None:
+        return None, None
+    raw = str(raw_id).strip()
+    if raw == '' or raw.lower() == 'none':
+        return None, None
+    if raw == '__nuevo__':
+        nombre = _validar_y_normalizar_texto(nombre_nuevo, mayusculas=False)
+        if not nombre:
+            return None, 'El nombre del nuevo transportista es obligatorio.'
+        if len(nombre) > 200:
+            return None, 'El nombre del transportista excede 200 caracteres.'
+        existente = Transportista.query.filter(
+            db.func.upper(Transportista.nombre) == nombre.upper()
+        ).first()
+        if existente:
+            return existente.id_transportista, None
+        nuevo = Transportista(nombre=nombre, activo=True)
+        db.session.add(nuevo)
+        db.session.flush()
+        return nuevo.id_transportista, None
+    id_int = _parse_int_or_none(raw)
+    if id_int:
+        return id_int, None
+    return None, None
+
+
+def _resolver_operador(raw_id, nombre_nuevo):
+    """
+    Resuelve id_operador igual que _resolver_transportista pero sobre Operador.
+    Devuelve (id_operador:int|None, error:str|None).
+    """
+    if raw_id is None:
+        return None, None
+    raw = str(raw_id).strip()
+    if raw == '' or raw.lower() == 'none':
+        return None, None
+    if raw == '__nuevo__':
+        nombre = _validar_y_normalizar_texto(nombre_nuevo, mayusculas=False)
+        if not nombre:
+            return None, 'El nombre del nuevo operador es obligatorio.'
+        if len(nombre) > 200:
+            return None, 'El nombre del operador excede 200 caracteres.'
+        existente = Operador.query.filter(
+            db.func.upper(Operador.nombre) == nombre.upper()
+        ).first()
+        if existente:
+            return existente.id_operador, None
+        nuevo = Operador(nombre=nombre, activo=True)
+        db.session.add(nuevo)
+        db.session.flush()
+        return nuevo.id_operador, None
+    id_int = _parse_int_or_none(raw)
+    if id_int:
+        return id_int, None
+    return None, None
 
 
 def _validar_embarque_form(datos, lotes_info, tiempos_obj, embarque_actual=None):
@@ -1808,21 +2558,79 @@ def _guardar_embarque_desde_form(embarque, request_form, es_nuevo, id_embarque_a
         embarque.packing = datos['packing']
         embarque.estatus = datos['estatus'] if datos['estatus'] in (
             'programado', 'en_planta', 'cargado', 'cancelado') else 'cargado'
-        embarque.id_producto = _parse_int_or_none(request_form.get('id_producto'))
-        embarque.id_cliente = _parse_int_or_none(request_form.get('id_cliente'))
+
+        # 2a) Resolver producto y cliente (soporta "Agregar nuevo")
+        mensajes_unidad = []
+
+        id_producto, err_p = _resolver_producto(
+            request_form.get('id_producto'),
+            request_form.get('nuevo_producto_descripcion'),
+            request_form.get('nuevo_producto_tipo'),
+            request_form.get('nuevo_producto_um'))
+        if err_p:
+            mensajes_unidad.append(err_p)
+
+        id_cliente, err_c = _resolver_cliente(
+            request_form.get('id_cliente'),
+            request_form.get('nuevo_cliente_nombre'))
+        if err_c:
+            mensajes_unidad.append(err_c)
+
+        embarque.id_producto = id_producto
+        embarque.id_cliente = id_cliente
+        # Limpiar campos de texto libre (ya no se usan; se crean catálogos)
+        embarque.producto_texto = None
+        embarque.cliente_texto = None
+
         tipo_unidad = (request_form.get('tipo_unidad') or '').strip()
         if tipo_unidad in TIPO_UNIDAD_GRUPO:
             embarque.tipo_unidad = tipo_unidad
-        embarque.id_transportista = _parse_int_or_none(request_form.get('id_transportista'))
-        embarque.id_operador = _parse_int_or_none(request_form.get('id_operador'))
-        embarque.id_tractor = _parse_int_or_none(request_form.get('id_tractor'))
-        embarque.id_remolque = _parse_int_or_none(request_form.get('id_remolque'))
+
+        # 2b) Resolver transportista / operador (soporta "Agregar nuevo")
+        #     y tractor / remolque. Si cualquiera devuelve error, abortar.
+
+        id_transportista, err_tr = _resolver_transportista(
+            request_form.get('id_transportista'),
+            request_form.get('nuevo_transportista_nombre'))
+        if err_tr:
+            mensajes_unidad.append(err_tr)
+
+        id_operador, err_op = _resolver_operador(
+            request_form.get('id_operador'),
+            request_form.get('nuevo_operador_nombre'))
+        if err_op:
+            mensajes_unidad.append(err_op)
+
+        id_tractor, err_t = _resolver_unidad_transporte(
+            request_form.get('id_tractor'),
+            request_form.get('nuevo_tractor_placa'),
+            'tractor')
+        if err_t:
+            mensajes_unidad.append(err_t)
+
+        id_remolque, err_r = _resolver_unidad_transporte(
+            request_form.get('id_remolque'),
+            request_form.get('nuevo_remolque_placa'),
+            'remolque')
+        if err_r:
+            mensajes_unidad.append(err_r)
+
+        if mensajes_unidad:
+            db.session.rollback()
+            for m in mensajes_unidad:
+                flash(m, 'warning')
+            return False, mensajes_unidad
+
+        embarque.id_transportista = id_transportista
+        embarque.id_operador = id_operador
+        embarque.id_tractor = id_tractor
+        embarque.id_remolque = id_remolque
+
         embarque.turno = datos['turno']
         if not 1 <= (embarque.turno or 0) <= 3:
             embarque.turno = datos['turno'] or 1
         temp_c = _parse_decimal_or_none(request_form.get('temperatura_c'))
         embarque.temperatura_c = temp_c
-        embarque.id_facilitador = _parse_int_or_none(request_form.get('id_facilitador'))
         embarque.observaciones = _validar_y_normalizar_texto(
             request_form.get('observaciones'), mayusculas=False)
 
@@ -2315,9 +3123,16 @@ def gestionar_catalogo(nombre):
         return redirect(url_for('gestionar_catalogo', nombre=nombre))
 
     # GET: listar y catálogos relacionados para FKs
-    # Ordenar por nombre / descripción si existen; de lo contrario por id.
+    # Determinar el nombre del campo clave primaria para el template.
+    pk_cols = list(Model.__mapper__.primary_key)
+    pk_name = pk_cols[0].name if pk_cols else 'id'
+
+    # Ordenar por nombre / descripción / placa / item si existen; de lo contrario
+    # por la clave primaria.
     if hasattr(Model, 'nombre'):
         items = Model.query.order_by(Model.nombre).all()
+    elif hasattr(Model, 'nombre_cliente'):
+        items = Model.query.order_by(Model.nombre_cliente).all()
     elif hasattr(Model, 'descripcion'):
         items = Model.query.order_by(Model.descripcion).all()
     elif hasattr(Model, 'placa'):
@@ -2325,13 +3140,11 @@ def gestionar_catalogo(nombre):
     elif hasattr(Model, 'item'):
         items = Model.query.order_by(Model.item).all()
     else:
-        items = Model.query.order_by(Model.id).all()
+        items = Model.query.order_by(getattr(Model, pk_name)).all()
+
     fk_opciones = {}
     if nombre == 'operadores':
         fk_opciones['id_transportista'] = Transportista.query.filter_by(activo=True).order_by(Transportista.nombre).all()
-    # Determinar el nombre del campo clave primaria para el template.
-    pk_cols = list(Model.__mapper__.primary_key)
-    pk_name = pk_cols[0].name if pk_cols else 'id'
 
     # Preparar los datos para renderizar la tabla: cada item se transforma en un
     # dict con los valores ya formateados (enum label, FK resuelto) para no poner
@@ -2392,7 +3205,1784 @@ def gestionar_catalogo(nombre):
 # FIN MÓDULO EMBARQUES
 # =====================================================================
 
+
+# =====================================================================
+# ===== MÓDULO EMPAQUE - RUTAS ========================================
+# =====================================================================
+# 4 sub-pestañas:
+#   A. Resumen      (lectura: todos los roles)
+#   B. Inventario   (lectura: todos los roles)
+#   C. Movimiento   (escritura: capturista / admin)
+#   D. Catálogo     (admin: artículos, catálogos, kits, carga masiva,
+#                    conciliación, ajustes, exportación)
+# =====================================================================
+
+
+def _empaque_render_base(tab_activa, template_hijo, **kwargs):
+    """
+    Helper interno. Renderiza la plantilla de Empaque inyectando
+    cuál de las 4 sub-pestañas está activa y los catálogos básicos.
+
+    Parámetros:
+        tab_activa: 'resumen' | 'inventario' | 'movimiento' | 'catalogo'
+        template_hijo: ruta del template específico a renderizar.
+        **kwargs: variables adicionales para el template.
+
+    Devuelve:
+        Response de render_template con la página completa.
+    """
+    return render_template(
+        template_hijo,
+        _empaque_tab_activa=tab_activa,
+        _empaque_hay_articulos=EmpaqueArticulo.query.count() > 0,
+        _empaque_hay_categorias=EmpaqueCategoria.query.filter_by(activo=True).count() > 0,
+        _empaque_hay_areas=EmpaqueArea.query.filter_by(activo=True).count() > 0,
+        _empaque_hay_proveedores=EmpaqueProveedor.query.filter_by(activo=True).count() > 0,
+        **kwargs
+    )
+
+
+# ---------------------------------------------------------------------
+# Sub-pestaña A: Resumen
+# ---------------------------------------------------------------------
+@app.route('/embarques/empaque', methods=['GET'])
+@login_required
+def empaque_resumen():
+    """
+    Vista principal del módulo Material de Empaque.
+    Muestra KPIs, tarjetas de atención y gráficas.
+    Acceso: todos los roles (consulta inclusa).
+    """
+    hoy = date.today()
+    mes_inicio = date(hoy.year, hoy.month, 1)
+
+    articulos_todos = EmpaqueArticulo.query.all()
+    articulos_activos = [a for a in articulos_todos if a.activo]
+
+    stock_map, _dyn_map, _dif_map = {}, {}, {}
+    if articulos_todos:
+        cods = [a.codigo for a in articulos_todos]
+        stock_map = _calcular_stock_batch(cods)
+
+    # KPIs y atención
+    kpis = {
+        'articulos_activos': len(articulos_activos),
+        'negativos_sin_stock': 0,
+        'bajo_o_diferencia': 0,
+        'sin_dato_dynamics': 0,
+        'movs_mes': 0,
+    }
+    atencion_puntajes = []
+    for a in articulos_activos:
+        stock = stock_map.get(a.codigo, 0)
+        dyn = a.fisico_dynamics
+        dif = (stock - dyn) if dyn is not None else None
+        minimo = a.stock_minimo if a.stock_minimo is not None else 0
+        clave, etiq, color = _estado_desde_valores(stock, dyn, dif, minimo)
+        if clave in {'neg_dynamics', 'sin_stock'}:
+            kpis['negativos_sin_stock'] += 1
+            atencion_puntajes.append((0, a.codigo, clave, etiq, color, stock, dyn, dif, minimo))
+        elif clave in {'bajo_min', 'con_diferencia'}:
+            kpis['bajo_o_diferencia'] += 1
+            atencion_puntajes.append((1, a.codigo, clave, etiq, color, stock, dyn, dif, minimo))
+        elif clave == 'sin_dynamics':
+            kpis['sin_dato_dynamics'] += 1
+            atencion_puntajes.append((2, a.codigo, clave, etiq, color, stock, dyn, dif, minimo))
+    atencion_puntajes.sort(key=lambda r: (r[0], r[1]))
+    requieren_atencion = []
+    for _prio, cod, clave, etiq, color, stock, dyn, dif, minimo in atencion_puntajes[:12]:
+        art = next((a for a in articulos_activos if a.codigo == cod), None)
+        if not art:
+            continue
+        requieren_atencion.append({
+            'codigo': cod,
+            'nombre': art.nombre,
+            'um': art.um,
+            'categoria': art.categoria.nombre if art.categoria else None,
+            'estado_clave': clave,
+            'estado_etiqueta': etiq,
+            'estado_color': color,
+            'stock': float(stock),
+            'dynamics': (float(dyn) if dyn is not None else None),
+            'diferencia': (float(dif) if dif is not None else None),
+            'minimo': float(minimo) if minimo else None,
+        })
+
+    # Movimientos del mes (conteo simple)
+    from sqlalchemy import func as sqla_func
+    cnt_e = db.session.query(sqla_func.count(EmpaqueEntrada.id_entrada)).filter(EmpaqueEntrada.fecha >= mes_inicio).scalar() or 0
+    cnt_s = db.session.query(sqla_func.count(EmpaqueSalida.id_salida)).filter(EmpaqueSalida.fecha >= mes_inicio).scalar() or 0
+    cnt_a = db.session.query(sqla_func.count(EmpaqueAjuste.id_ajuste)).filter(EmpaqueAjuste.fecha >= mes_inicio).scalar() or 0
+    kpis['movs_mes'] = cnt_e + cnt_s + cnt_a
+
+    # Salidas x mes (últimos 6 meses)
+    salidas_mes = []
+    for i in range(5, -1, -1):
+        if hoy.month - i <= 0:
+            y = hoy.year - 1
+            m = hoy.month - i + 12
+        else:
+            y = hoy.year
+            m = hoy.month - i
+        ini = date(y, m, 1)
+        if m == 12:
+            fin_m = date(y + 1, 1, 1)
+        else:
+            fin_m = date(y, m + 1, 1)
+        total = db.session.query(sqla_func.coalesce(sqla_func.sum(EmpaqueSalida.cantidad), 0)) \
+            .filter(EmpaqueSalida.fecha >= ini, EmpaqueSalida.fecha < fin_m).scalar() or 0
+        salidas_mes.append({'mes': ini.strftime('%b %Y'), 'cantidad': float(total)})
+
+    # Salidas x área (mes actual)
+    salidas_area = []
+    for area in EmpaqueArea.query.filter_by(activo=True).order_by(EmpaqueArea.nombre).all():
+        total = db.session.query(sqla_func.coalesce(sqla_func.sum(EmpaqueSalida.cantidad), 0)) \
+            .filter(EmpaqueSalida.id_area == area.id_area, EmpaqueSalida.fecha >= mes_inicio).scalar() or 0
+        if total:
+            salidas_area.append({'area': area.nombre, 'cantidad': float(total)})
+    salidas_area.sort(key=lambda r: r['cantidad'], reverse=True)
+
+    # Entradas recientes (últimas 6)
+    entradas_recientes = []
+    for e in EmpaqueEntrada.query.order_by(EmpaqueEntrada.fecha.desc(), EmpaqueEntrada.id_entrada.desc()).limit(6).all():
+        entradas_recientes.append({
+            'fecha': e.fecha.isoformat() if e.fecha else '',
+            'articulo': e.articulo.nombre if e.articulo else e.codigo,
+            'um': e.articulo.um if e.articulo else 'Pz',
+            'cantidad': float(e.cantidad),
+            'proveedor': e.proveedor.nombre if e.proveedor else None,
+        })
+
+    # Salidas x lote de pulpa (mes actual, top 5)
+    lotes_pulpa = []
+    area_pulpa = next((a for a in EmpaqueArea.query.filter_by(activo=True).all() if (a.nombre or '').strip().lower() == 'pulpa'), None)
+    if area_pulpa:
+        rows = db.session.query(
+            EmpaqueSalida.id_lote, sqla_func.coalesce(sqla_func.sum(EmpaqueSalida.cantidad), 0)
+        ).filter(EmpaqueSalida.id_area == area_pulpa.id_area, EmpaqueSalida.fecha >= mes_inicio, EmpaqueSalida.id_lote.isnot(None)) \
+         .group_by(EmpaqueSalida.id_lote).order_by(sqla_func.sum(EmpaqueSalida.cantidad).desc()).limit(5).all()
+        for id_lote, total in rows:
+            lote_obj = Lote.query.get(id_lote)
+            if lote_obj:
+                lotes_pulpa.append({
+                    'lote': lote_obj.codigo_lote,
+                    'producto': lote_obj.producto,
+                    'cantidad': float(total),
+                })
+
+    return _empaque_render_base(
+        'resumen',
+        'empaque/resumen.html',
+        kpis=kpis,
+        requieren_atencion=requieren_atencion,
+        salidas_mes=salidas_mes,
+        salidas_area=salidas_area,
+        entradas_recientes=entradas_recientes,
+        lotes_pulpa=lotes_pulpa,
+        mes_actual=mes_inicio.strftime('%B %Y').capitalize(),
+    )
+
+
+# ---------------------------------------------------------------------
+# Sub-pestaña B: Inventario
+# ---------------------------------------------------------------------
+@app.route('/embarques/empaque/inventario', methods=['GET'])
+@login_required
+def empaque_inventario():
+    """
+    Listado de artículos con stock, filtros y botones de estado.
+    Acceso: todos los roles.
+    """
+    q_buscar = (request.args.get('buscar') or '').strip()
+    q_categoria = _parse_int_or_none(request.args.get('categoria'))
+    q_estado = (request.args.get('estado') or 'todos').strip().lower()
+
+    query = EmpaqueArticulo.query.order_by(EmpaqueArticulo.nombre)
+    if q_buscar:
+        like = f'%{q_buscar}%'
+        query = query.filter(db.or_(
+            EmpaqueArticulo.codigo.ilike(like),
+            EmpaqueArticulo.nombre.ilike(like),
+        ))
+    if q_categoria:
+        query = query.filter_by(id_categoria=q_categoria)
+
+    articulos_raw = query.all()
+    categorias = EmpaqueCategoria.query.filter_by(activo=True).order_by(EmpaqueCategoria.nombre).all()
+
+    stock_map, dynamics_map, diferencia_map = {}, {}, {}
+    if articulos_raw:
+        cods = [a.codigo for a in articulos_raw]
+        stock_map = _calcular_stock_batch(cods)
+        for a in articulos_raw:
+            dynamics_map[a.codigo] = a.fisico_dynamics
+            if a.fisico_dynamics is None:
+                diferencia_map[a.codigo] = None
+            else:
+                diferencia_map[a.codigo] = stock_map.get(a.codigo, 0) - a.fisico_dynamics
+
+    # Filtro por estado (calculado después de batch)
+    estados_visibles = {
+        'negativo_dynamics': {'neg_dynamics'},
+        'sin_stock': {'sin_stock'},
+        'bajo_minimo': {'bajo_min'},
+        'sin_dynamics': {'sin_dynamics'},
+        'con_diferencia': {'con_diferencia'},
+        'cuadra': {'cuadra'},
+    }
+    articulos = []
+    for a in articulos_raw:
+        stock = stock_map.get(a.codigo, 0)
+        dyn = dynamics_map.get(a.codigo)
+        dif = diferencia_map.get(a.codigo)
+        minimo = a.stock_minimo if a.stock_minimo is not None else 0
+        clave, _etiq, _color = _estado_desde_valores(stock, dyn, dif, minimo)
+        if q_estado == 'todos' or clave in estados_visibles.get(q_estado, set()):
+            articulos.append(a)
+
+    return _empaque_render_base(
+        'inventario',
+        'empaque/inventario.html',
+        articulos=articulos,
+        categorias=categorias,
+        filtros={
+            'buscar': q_buscar,
+            'id_categoria': q_categoria,
+            'estado': q_estado,
+        },
+        stock_map=stock_map,
+        dynamics_map=dynamics_map,
+        diferencia_map=diferencia_map,
+    )
+
+
+# API auxiliar (GET) para el panel lateral de historial por artículo.
+@app.route('/embarques/empaque/api/articulo/<codigo>', methods=['GET'])
+@login_required
+def empaque_api_articulo_detalle(codigo):
+    """
+    Endpoint JSON auxiliar para el panel lateral del Inventario.
+    Devuelve historial de movimientos y existencia en el tiempo (últimos 30 días).
+    Acceso: todos los roles.
+    """
+    art = EmpaqueArticulo.query.get_or_404(codigo)
+    entradas = EmpaqueEntrada.query.filter_by(codigo=codigo).order_by(EmpaqueEntrada.fecha.desc(), EmpaqueEntrada.id_entrada.desc()).limit(20).all()
+    salidas = EmpaqueSalida.query.filter_by(codigo=codigo).order_by(EmpaqueSalida.fecha.desc(), EmpaqueSalida.id_salida.desc()).limit(20).all()
+    ajustes = EmpaqueAjuste.query.filter_by(codigo=codigo).order_by(EmpaqueAjuste.fecha.desc(), EmpaqueAjuste.id_ajuste.desc()).limit(20).all()
+
+    def serializar_entrada(m):
+        return {'tipo': 'entrada', 'fecha': m.fecha.isoformat() if m.fecha else None,
+                'cantidad': float(m.cantidad), 'rechazos': float(m.rechazos or 0),
+                'detalle': m.proveedor.nombre if m.proveedor else '',
+                'comentario': m.comentario,
+                'usuario': m.usuario.usuario if m.usuario else ''}
+    def serializar_salida(m):
+        return {'tipo': 'salida', 'fecha': m.fecha.isoformat() if m.fecha else None,
+                'cantidad': float(m.cantidad),
+                'detalle': (m.area.nombre if m.area else '') +
+                           (f' (Lote {m.lote.codigo_lote})' if m.lote else ''),
+                'comentario': m.comentario,
+                'usuario': m.usuario.usuario if m.usuario else ''}
+    def serializar_ajuste(m):
+        return {'tipo': 'ajuste', 'fecha': m.fecha.isoformat() if m.fecha else None,
+                'cantidad': float(m.cantidad),
+                'detalle': m.motivo,
+                'comentario': '',
+                'usuario': m.usuario.usuario if m.usuario else ''}
+
+    movs = (
+        [serializar_entrada(e) for e in entradas] +
+        [serializar_salida(s) for s in salidas] +
+        [serializar_ajuste(a) for a in ajustes]
+    )
+    movs.sort(key=lambda r: (r.get('fecha') or '', r['tipo']), reverse=True)
+
+    stock = art.stock_actual
+    clave, etiq, color = art.estado_articulo
+
+    return jsonify({
+        'ok': True,
+        'articulo': {
+            'codigo': art.codigo,
+            'nombre': art.nombre,
+            'um': art.um,
+            'categoria': art.categoria.nombre if art.categoria else None,
+            'stock_actual': float(stock),
+            'fisico_dynamics': float(art.fisico_dynamics) if art.fisico_dynamics is not None else None,
+            'diferencia': float(art.diferencia) if art.diferencia is not None else None,
+            'estado_clave': clave,
+            'estado_etiqueta': etiq,
+            'estado_color': color,
+        },
+        'movimientos': movs[:60],
+    })
+
+
+# ---------------------------------------------------------------------
+# Sub-pestaña C: Registrar movimiento (Entrada / Salida / Kit)
+# ---------------------------------------------------------------------
+@app.route('/embarques/empaque/movimiento', methods=['GET', 'POST'])
+@login_required
+def empaque_movimiento():
+    """
+    Formulario de registro de Entrada o Salida individual.
+    POST: guarda el movimiento en transacción y valida stock / fecha / UM / lote para Pulpa.
+    Acceso: capturista / admin.
+    """
+    if _empaque_deny_if_guest_or_consulta():
+        return redirect(url_for('empaque_resumen'))
+
+    if request.method == 'POST':
+        tipo = (request.form.get('mov_tipo') or '').strip().lower()
+        codigo = (request.form.get('codigo') or '').strip()
+        cantidad_raw = (request.form.get('cantidad') or '').strip()
+        fecha_str = (request.form.get('fecha') or '').strip()
+        comentario = (request.form.get('comentario') or '').strip() or None
+
+        art = EmpaqueArticulo.query.get(codigo) if codigo else None
+        if not art or not art.activo:
+            flash('Artículo no válido.', 'error')
+            return redirect(url_for('empaque_movimiento'))
+        if tipo not in ('entrada', 'salida'):
+            flash('Tipo de movimiento no válido.', 'error')
+            return redirect(url_for('empaque_movimiento'))
+
+        cant_ok, cantidad, msg_cant = _validar_cantidad_por_um(cantidad_raw, art.um)
+        if not cant_ok:
+            flash(f'Cantidad: {msg_cant}', 'error')
+            return redirect(url_for('empaque_movimiento'))
+        if cantidad <= 0:
+            flash('Cantidad debe ser mayor a 0.', 'error')
+            return redirect(url_for('empaque_movimiento'))
+
+        fecha_mov = _parse_date_or_none(fecha_str)
+        hoy = date.today()
+        if fecha_mov is None:
+            flash('Fecha no válida (usa AAAA-MM-DD).', 'error')
+            return redirect(url_for('empaque_movimiento'))
+        if fecha_mov > hoy:
+            flash('La fecha no puede ser futura.', 'error')
+            return redirect(url_for('empaque_movimiento'))
+
+        if tipo == 'entrada':
+            rechazos_raw = (request.form.get('rechazos') or '0').strip()
+            rec_ok, rechazos, msg_rec = _validar_cantidad_por_um(rechazos_raw, art.um)
+            if not rec_ok:
+                flash(f'Rechazos: {msg_rec}', 'error')
+                return redirect(url_for('empaque_movimiento'))
+            if rechazos < 0:
+                rechazos = 0
+            if rechazos > cantidad:
+                flash('Rechazos no pueden superar la cantidad recibida.', 'error')
+                return redirect(url_for('empaque_movimiento'))
+
+            id_proveedor = _parse_int_or_none(request.form.get('id_proveedor'))
+            entrada = EmpaqueEntrada(
+                codigo=art.codigo,
+                cantidad=cantidad,
+                rechazos=rechazos,
+                fecha=fecha_mov,
+                id_proveedor=id_proveedor,
+                comentario=comentario,
+                creado_por=current_user.id_usuario,
+            )
+            db.session.add(entrada)
+            db.session.commit()
+            flash(f'Entrada registrada: {art.nombre} · {_format_numero(cantidad, art.um)} {art.um}.', 'success')
+            return redirect(url_for('empaque_movimiento'))
+
+        # Salida
+        id_area = _parse_int_or_none(request.form.get('id_area'))
+        area = EmpaqueArea.query.get(id_area) if id_area else None
+        if not area:
+            flash('Selecciona un área que solicite.', 'error')
+            return redirect(url_for('empaque_movimiento'))
+
+        id_lote = _parse_int_or_none(request.form.get('id_lote'))
+        es_pulpa = (area.nombre or '').strip().lower() == 'pulpa'
+        if es_pulpa and not id_lote:
+            flash('Para el área Pulpa es obligatorio elegir un lote.', 'error')
+            return redirect(url_for('empaque_movimiento'))
+        if id_lote:
+            lote_obj = Lote.query.get(id_lote)
+            if not lote_obj:
+                flash('Lote no válido.', 'error')
+                return redirect(url_for('empaque_movimiento'))
+
+        stock_actual = art.stock_actual
+        if stock_actual < cantidad:
+            flash(
+                f'Stock insuficiente para "{art.nombre}". Disponible: {_format_numero(stock_actual, art.um)} {art.um}, '
+                f'solicitaste {_format_numero(cantidad, art.um)} {art.um}.',
+                'error'
+            )
+            return redirect(url_for('empaque_movimiento'))
+
+        salida = EmpaqueSalida(
+            codigo=art.codigo,
+            cantidad=cantidad,
+            fecha=fecha_mov,
+            id_area=area.id_area,
+            id_lote=id_lote,
+            comentario=comentario,
+            creado_por=current_user.id_usuario,
+        )
+        db.session.add(salida)
+        db.session.commit()
+        flash(f'Salida registrada: {art.nombre} · {_format_numero(cantidad, art.um)} {art.um} hacia {area.nombre}.', 'success')
+        return redirect(url_for('empaque_movimiento'))
+
+    articulos = EmpaqueArticulo.query.filter_by(activo=True).order_by(EmpaqueArticulo.nombre).all()
+    areas = EmpaqueArea.query.filter_by(activo=True).order_by(EmpaqueArea.nombre).all()
+    proveedores = EmpaqueProveedor.query.filter_by(activo=True).order_by(EmpaqueProveedor.nombre).all()
+    lotes = Lote.query.order_by(Lote.codigo_lote.desc()).limit(200).all()
+
+    # Listado mix movimientos recientes (últimas 30 filas)
+    recientes = []
+    for e in EmpaqueEntrada.query.order_by(EmpaqueEntrada.fecha.desc(), EmpaqueEntrada.id_entrada.desc()).limit(15).all():
+        recientes.append((
+            e.fecha, 'E',
+            e.articulo.nombre if e.articulo else e.codigo,
+            e.cantidad,
+            (e.proveedor.nombre if e.proveedor else '') + (f' · rechazos {e.rechazos}' if e.rechazos else ''),
+            'chip-success',
+        ))
+    for s in EmpaqueSalida.query.order_by(EmpaqueSalida.fecha.desc(), EmpaqueSalida.id_salida.desc()).limit(15).all():
+        detalle = s.area.nombre if s.area else ''
+        if s.lote:
+            detalle += f' · lote {s.lote.codigo_lote}'
+        recientes.append((
+            s.fecha, 'S',
+            s.articulo.nombre if s.articulo else s.codigo,
+            s.cantidad,
+            detalle,
+            'chip-danger',
+        ))
+    recientes.sort(key=lambda r: (r[0] or date.min), reverse=True)
+    movimientos_recientes = []
+    for fecha, tipo, nombre, cant, detalle, chip in recientes[:30]:
+        movimientos_recientes.append({
+            'tipo': 'Entrada' if tipo == 'E' else 'Salida',
+            'articulo': nombre,
+            'cantidad': _format_numero(cant),
+            'fecha': fecha.isoformat() if fecha else '',
+            'detalle': detalle,
+            'chip': chip,
+        })
+
+    # Kit sugerido para el área Pulpa
+    kit_filas = []
+    from decimal import Decimal
+    from sqlalchemy import func as sqla_func
+    # Buscar el área "Pulpa"
+    area_pulpa = next(
+        (a for a in areas if (a.nombre or '').strip().lower() == 'pulpa'),
+        None
+    )
+    if area_pulpa:
+        cmap = {}
+        for cod, val in db.session.query(
+            EmpaqueEntrada.codigo, sqla_func.coalesce(sqla_func.sum(EmpaqueEntrada.cantidad - sqla_func.coalesce(EmpaqueEntrada.rechazos, 0)), 0)
+        ).group_by(EmpaqueEntrada.codigo).all():
+            cmap[cod] = Decimal(str(val))
+        smap = {}
+        for cod, val in db.session.query(EmpaqueSalida.codigo, sqla_func.coalesce(sqla_func.sum(EmpaqueSalida.cantidad), 0)).group_by(EmpaqueSalida.codigo).all():
+            smap[cod] = Decimal(str(val))
+        amap = {}
+        for cod, val in db.session.query(EmpaqueAjuste.codigo, sqla_func.coalesce(sqla_func.sum(EmpaqueAjuste.cantidad), 0)).group_by(EmpaqueAjuste.codigo).all():
+            amap[cod] = Decimal(str(val))
+        kits = EmpaqueKit.query.filter_by(id_area=area_pulpa.id_area).all()
+        for kc in kits:
+            art = EmpaqueArticulo.query.get(kc.codigo)
+            stock = (cmap.get(kc.codigo, Decimal('0')) - smap.get(kc.codigo, Decimal('0')) + amap.get(kc.codigo, Decimal('0')))
+            um = art.um if art else 'Pz'
+            kit_filas.append({
+                'articulo': art,
+                'cantidad_sugerida': _format_numero(kc.cantidad_sugerida, um),
+                'disponible': _format_numero(stock, um),
+                'codigo': kc.codigo,
+                'cantidad_raw': float(kc.cantidad_sugerida),
+                'stock_raw': float(stock),
+            })
+
+    return _empaque_render_base(
+        'movimiento',
+        'empaque/movimiento.html',
+        articulos=articulos,
+        areas=areas,
+        proveedores=proveedores,
+        lotes=lotes,
+        movimientos_recientes=movimientos_recientes,
+        kit_filas=kit_filas,
+        area_pulpa_nombre='Pulpa',
+    )
+
+
+@app.route('/embarques/empaque/kit', methods=['POST'])
+@login_required
+def empaque_registrar_kit():
+    """
+    Registra el kit COMPLETO de una sola vez (transacción TODO O NADA).
+    Si un artículo no tiene stock suficiente NO se guarda NINGUNA salida.
+    Acceso: capturista / admin.
+    """
+    if _empaque_deny_if_guest_or_consulta():
+        return redirect(url_for('empaque_resumen'))
+
+    area_pulpa = EmpaqueArea.query.filter(EmpaqueArea.activo == True).all()
+    area_pulpa = next((a for a in area_pulpa if (a.nombre or '').strip().lower() == 'pulpa'), None)
+    if not area_pulpa:
+        flash('No existe el área "Pulpa" para registrar el kit.', 'error')
+        return redirect(url_for('empaque_movimiento'))
+
+    kits = EmpaqueKit.query.filter_by(id_area=area_pulpa.id_area).all()
+    if not kits:
+        flash('No hay un kit configurado para el área Pulpa. Defínelo en Catálogo · Kits (solo admin).', 'error')
+        return redirect(url_for('empaque_movimiento'))
+
+    id_lote = _parse_int_or_none(request.form.get('id_lote') or request.args.get('id_lote'))
+    fecha_str = (request.form.get('fecha') or '').strip() or date.today().isoformat()
+    comentario = (request.form.get('comentario') or '').strip() or None
+    comentario_final = f'[Kit Pulpa] ' + (comentario or '')
+
+    fecha_mov = _parse_date_or_none(fecha_str) or date.today()
+    if fecha_mov > date.today():
+        flash('Fecha del kit no puede ser futura.', 'error')
+        return redirect(url_for('empaque_movimiento'))
+
+    if not id_lote:
+        flash('Para registrar el kit se requiere un lote de Pulpa. Selecciónalo antes de enviar.', 'error')
+        return redirect(url_for('empaque_movimiento'))
+    lote_obj = Lote.query.get(id_lote)
+    if not lote_obj:
+        flash('Lote no válido.', 'error')
+        return redirect(url_for('empaque_movimiento'))
+
+    # Resolver artículos y validar stock TODO O NADA
+    articulos_kit = []
+    faltantes = []
+    for kc in kits:
+        art = EmpaqueArticulo.query.get(kc.codigo)
+        if not art or not art.activo:
+            faltantes.append(f'Artículo {kc.codigo} no existe o está inactivo.')
+            continue
+        if art.stock_actual < kc.cantidad_sugerida:
+            faltantes.append(
+                f'{art.nombre}: disponible {_format_numero(art.stock_actual, art.um)} {art.um} '
+                f'< {_format_numero(kc.cantidad_sugerida, art.um)} {art.um}'
+            )
+        articulos_kit.append((art, kc.cantidad_sugerida))
+    if faltantes:
+        flash('No se registró nada (kit todo o nada). Faltan: ' + ' | '.join(faltantes), 'error')
+        return redirect(url_for('empaque_movimiento'))
+
+    # Paso 2: registrar salidas en transacción única
+    try:
+        for art, cantidad in articulos_kit:
+            db.session.add(EmpaqueSalida(
+                codigo=art.codigo,
+                cantidad=cantidad,
+                fecha=fecha_mov,
+                id_area=area_pulpa.id_area,
+                id_lote=id_lote,
+                comentario=comentario_final,
+                creado_por=current_user.id_usuario,
+            ))
+        db.session.commit()
+        flash(f'Kit registrado: {len(articulos_kit)} artículos · lote {lote_obj.codigo_lote}.', 'success')
+    except Exception as exc:  # pragma: no cover - rollback por error de BD
+        db.session.rollback()
+        flash(f'Error al guardar el kit: {exc}', 'error')
+    return redirect(url_for('empaque_movimiento'))
+
+
+# ---------------------------------------------------------------------
+# Sub-pestaña D: Catálogo y configuración (solo admin)
+# ---------------------------------------------------------------------
+@app.route('/embarques/empaque/catalogo', methods=['GET', 'POST'])
+@login_required
+def empaque_catalogo():
+    """
+    Sub-pestaña D: Catálogo + Carga masiva + Conciliación + Ajustes + Export.
+    Contiene secciones (anclas): articulos, categorias, areas, proveedores,
+    kits, carga_masiva, conciliacion, ajustes, exportacion.
+    Acceso: solo administrador.
+    """
+    if _empaque_deny_if_not_admin():
+        return redirect(url_for('empaque_resumen'))
+    ultimos_ajustes_raw = EmpaqueAjuste.query.order_by(
+        EmpaqueAjuste.fecha.desc(), EmpaqueAjuste.id_ajuste.desc()
+    ).limit(15).all()
+    ultimos_ajustes = []
+    for a in ultimos_ajustes_raw:
+        ultimos_ajustes.append({
+            'fecha': a.fecha.isoformat() if a.fecha else '',
+            'articulo': a.articulo.nombre if a.articulo else a.codigo,
+            'cantidad': _format_numero(a.cantidad, a.articulo.um if a.articulo else 'Pz'),
+            'motivo': a.motivo,
+            'usuario': a.usuario.usuario if a.usuario else None,
+        })
+
+    # --- Fase 3: implementación completa (CRUD + cargas) ---
+    return _empaque_render_base(
+        'catalogo',
+        'empaque/catalogo.html',
+        seccion=(request.args.get('seccion') or 'articulos'),
+        articulos=EmpaqueArticulo.query.order_by(EmpaqueArticulo.nombre).all(),
+        categorias=EmpaqueCategoria.query.order_by(EmpaqueCategoria.activo.desc(), EmpaqueCategoria.nombre).all(),
+        areas=EmpaqueArea.query.order_by(EmpaqueArea.activo.desc(), EmpaqueArea.nombre).all(),
+        proveedores=EmpaqueProveedor.query.order_by(EmpaqueProveedor.activo.desc(), EmpaqueProveedor.nombre).all(),
+        kits=EmpaqueKit.query.order_by(EmpaqueKit.id_area, EmpaqueKit.codigo).all(),
+        # Datos de sesión para preview de cargas masivas
+        carga_articulos=session.get('empaque_carga_articulos'),
+        carga_entradas=session.get('empaque_carga_movs_entradas'),
+        carga_salidas=session.get('empaque_carga_movs_salidas'),
+        ultimos_ajustes=ultimos_ajustes,
+    )
+
+
+# --- Stubs de escritura del Catálogo (Fase 3, luego se llena) ---
+
+@app.route('/embarques/empaque/catalogo/articulo', methods=['POST'])
+@login_required
+def empaque_catalogo_guardar_articulo():
+    """
+    Alta o edición de un artículo de empaque. Solo administrador.
+
+    Reglas de negocio:
+      - Código único (PK natural).
+      - Nombre único.
+      - Si el artículo ya tiene movimientos NO SE PUEDE MODIFICAR código,
+        ni UM (ambos comprometen stock / auditoría).
+      - No se elimina físicamente; si tiene movimientos solo inactivar.
+    """
+    if _empaque_deny_if_not_admin():
+        return redirect(url_for('empaque_resumen'))
+    form = request.form
+
+    # Si viene codigo_original es edición; de lo contrario alta nueva.
+    codigo_original = (form.get('codigo_original') or '').strip()
+    nuevo_codigo = (form.get('codigo') or '').strip().upper()
+    nombre = _validar_y_normalizar_texto(form.get('nombre'), mayusculas=False)
+    id_categoria = _parse_int_or_none(form.get('id_categoria'))
+    um = (form.get('um') or '').strip()
+    almacen = (form.get('almacen') or 'CP005').strip().upper() or 'CP005'
+    stock_minimo = _parse_decimal_or_none(form.get('stock_minimo'))
+    fisico_dynamics = _parse_decimal_or_none(form.get('fisico_dynamics'))
+
+    errores = []
+    if not nuevo_codigo:
+        errores.append('El código es obligatorio.')
+    if not nombre:
+        errores.append('El nombre es obligatorio.')
+    if um not in ('Pz', 'Kg'):
+        errores.append('La unidad de medida debe ser Pz o Kg.')
+    if stock_minimo is not None and stock_minimo < 0:
+        errores.append('El stock mínimo no puede ser negativo.')
+
+    if errores:
+        for e in errores:
+            flash(e, 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='articulos'))
+
+    # Si es edición
+    if codigo_original:
+        art = EmpaqueArticulo.query.filter_by(codigo=codigo_original).first()
+        if not art:
+            flash('Artículo original no encontrado.', 'danger')
+            return redirect(url_for('empaque_catalogo', seccion='articulos'))
+
+        tiene_movs = _empaque_tiene_movimientos(codigo_original)
+
+        # Restricción: no cambiar código ni UM si tiene movimientos.
+        if tiene_movs and nuevo_codigo != codigo_original:
+            flash('No se puede cambiar el código: el artículo ya tiene movimientos asociados.', 'danger')
+            return redirect(url_for('empaque_catalogo', seccion='articulos'))
+        if tiene_movs and um != art.um:
+            flash('No se puede cambiar la unidad: el artículo ya tiene movimientos asociados.', 'danger')
+            return redirect(url_for('empaque_catalogo', seccion='articulos'))
+
+        # Validar que el nuevo código no exista en otro artículo.
+        if nuevo_codigo != codigo_original:
+            if EmpaqueArticulo.query.filter_by(codigo=nuevo_codigo).first():
+                flash(f'Ya existe un artículo con el código {nuevo_codigo}.', 'danger')
+                return redirect(url_for('empaque_catalogo', seccion='articulos'))
+            art.codigo = nuevo_codigo
+
+        # Validar que el nombre no se duplique en otro artículo.
+        otro = EmpaqueArticulo.query.filter(
+            db.func.lower(EmpaqueArticulo.nombre) == nombre.lower(),
+            EmpaqueArticulo.codigo != art.codigo
+        ).first()
+        if otro:
+            flash('Ya existe un artículo con ese nombre.', 'danger')
+            return redirect(url_for('empaque_catalogo', seccion='articulos'))
+
+        art.nombre = nombre
+        art.um = um
+        art.almacen = almacen
+        art.id_categoria = id_categoria
+        art.stock_minimo = stock_minimo
+        art.fisico_dynamics = fisico_dynamics
+        art.activo = True if (form.get('activo') or '1') == '1' else art.activo
+
+        try:
+            db.session.commit()
+            flash(f'Artículo {art.codigo} actualizado correctamente.', 'success')
+        except Exception as ex:
+            db.session.rollback()
+            flash(f'Error al guardar: {ex}', 'danger')
+
+        return redirect(url_for('empaque_catalogo', seccion='articulos'))
+
+    # --- Alta nueva ---
+    if EmpaqueArticulo.query.filter_by(codigo=nuevo_codigo).first():
+        flash(f'Ya existe un artículo con el código {nuevo_codigo}.', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='articulos'))
+    if EmpaqueArticulo.query.filter(
+        db.func.lower(EmpaqueArticulo.nombre) == nombre.lower()
+    ).first():
+        flash('Ya existe un artículo con ese nombre.', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='articulos'))
+
+    nuevo = EmpaqueArticulo(
+        codigo=nuevo_codigo,
+        nombre=nombre,
+        id_categoria=id_categoria,
+        um=um,
+        almacen=almacen,
+        stock_minimo=stock_minimo,
+        fisico_dynamics=fisico_dynamics,
+        activo=True,
+    )
+    db.session.add(nuevo)
+    try:
+        db.session.commit()
+        flash(f'Artículo {nuevo.codigo} creado correctamente.', 'success')
+    except Exception as ex:
+        db.session.rollback()
+        flash(f'Error al crear: {ex}', 'danger')
+    return redirect(url_for('empaque_catalogo', seccion='articulos'))
+
+
+@app.route('/embarques/empaque/catalogo/articulo/toggle', methods=['POST'])
+@login_required
+def empaque_catalogo_toggle_articulo():
+    """
+    Activa o inactiva un artículo (baja lógica).
+    Si tiene movimientos NUNCA se borra; solo se desactiva.
+    """
+    if _empaque_deny_if_not_admin():
+        return redirect(url_for('empaque_resumen'))
+    codigo = (request.form.get('codigo') or '').strip()
+    art = EmpaqueArticulo.query.filter_by(codigo=codigo).first()
+    if not art:
+        flash('Artículo no encontrado.', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='articulos'))
+    art.activo = not art.activo
+    db.session.commit()
+    flash(f'Artículo {art.codigo} {"activado" if art.activo else "inactivado"} correctamente.',
+          'success')
+    return redirect(url_for('empaque_catalogo', seccion='articulos'))
+
+
+# =====================================================================
+# CRUD simple de catálogos (Categoría / Área / Proveedor).
+# Todos comparten la misma lógica: UNIQUE(nombre), activo, nunca borrar.
+# =====================================================================
+
+def _empaque_guardar_catalogo_simple(Model, attr_nombre, seccion):
+    """Reutilizable para los 3 catálogos simples de Empaque."""
+    if _empaque_deny_if_not_admin():
+        return redirect(url_for('empaque_resumen'))
+    nombre = _validar_y_normalizar_texto(request.form.get('nombre'), mayusculas=False)
+    id_item = _parse_int_or_none(request.form.get('id_item'))
+    if not nombre:
+        flash('Nombre es obligatorio.', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion=seccion))
+    # Editar
+    if id_item:
+        obj = Model.query.get(id_item)
+        if not obj:
+            flash('Registro no encontrado.', 'danger')
+            return redirect(url_for('empaque_catalogo', seccion=seccion))
+        # Validar que no exista el mismo nombre en otro registro
+        otro = Model.query.filter(
+            db.func.lower(getattr(Model, attr_nombre)) == nombre.lower(),
+            Model.__table__.primary_key.columns.values()[0] != id_item
+        ).first()
+        if otro:
+            flash(f'Ya existe un registro con ese nombre en {seccion}.', 'danger')
+            return redirect(url_for('empaque_catalogo', seccion=seccion))
+        setattr(obj, attr_nombre, nombre)
+        if request.form.get('activo') is not None:
+            obj.activo = request.form.get('activo') == '1'
+        db.session.commit()
+        flash('Registro actualizado.', 'success')
+        return redirect(url_for('empaque_catalogo', seccion=seccion))
+    # Nuevo
+    if Model.query.filter(db.func.lower(getattr(Model, attr_nombre)) == nombre.lower()).first():
+        flash(f'Ya existe un registro con ese nombre en {seccion}.', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion=seccion))
+    nuevo = Model(**{attr_nombre: nombre, 'activo': True})
+    db.session.add(nuevo)
+    db.session.commit()
+    flash('Registro agregado correctamente.', 'success')
+    return redirect(url_for('empaque_catalogo', seccion=seccion))
+
+
+@app.route('/embarques/empaque/catalogo/categoria', methods=['POST'])
+@login_required
+def empaque_catalogo_guardar_categoria():
+    return _empaque_guardar_catalogo_simple(EmpaqueCategoria, 'nombre', 'categorias')
+
+
+@app.route('/embarques/empaque/catalogo/area', methods=['POST'])
+@login_required
+def empaque_catalogo_guardar_area():
+    return _empaque_guardar_catalogo_simple(EmpaqueArea, 'nombre', 'areas')
+
+
+@app.route('/embarques/empaque/catalogo/proveedor', methods=['POST'])
+@login_required
+def empaque_catalogo_guardar_proveedor():
+    return _empaque_guardar_catalogo_simple(EmpaqueProveedor, 'nombre', 'proveedores')
+
+
+# =====================================================================
+# CRUD de Kit por área
+# =====================================================================
+
+@app.route('/embarques/empaque/catalogo/kit', methods=['POST'])
+@login_required
+def empaque_catalogo_guardar_kit():
+    """
+    Agrega o actualiza una fila de kit por (área, artículo).
+    Si la combinación ya existe actualiza cantidad_sugerida; si no crea.
+    """
+    if _empaque_deny_if_not_admin():
+        return redirect(url_for('empaque_resumen'))
+    form = request.form
+    id_area = _parse_int_or_none(form.get('id_area'))
+    codigo = (form.get('codigo') or '').strip()
+    cant = _parse_decimal_or_none(form.get('cantidad_sugerida'))
+
+    if not id_area or not EmpaqueArea.query.get(id_area):
+        flash('Área no válida.', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='kits'))
+    if not codigo or not EmpaqueArticulo.query.filter_by(codigo=codigo).first():
+        flash('Artículo no válido.', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='kits'))
+    if not cant or cant <= 0:
+        flash('Cantidad sugerida debe ser mayor a cero.', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='kits'))
+
+    existente = EmpaqueKit.query.filter_by(id_area=id_area, codigo=codigo).first()
+    if existente:
+        existente.cantidad_sugerida = cant
+    else:
+        db.session.add(EmpaqueKit(id_area=id_area, codigo=codigo, cantidad_sugerida=cant))
+    try:
+        db.session.commit()
+        flash('Fila de kit guardada correctamente.', 'success')
+    except Exception as ex:
+        db.session.rollback()
+        flash(f'Error: {ex}', 'danger')
+    return redirect(url_for('empaque_catalogo', seccion='kits'))
+
+
+@app.route('/embarques/empaque/catalogo/kit/<int:id_kit>/eliminar', methods=['POST'])
+@login_required
+def empaque_catalogo_eliminar_kit(id_kit):
+    """Elimina una fila del kit. El kit no es movimiento, no requiere auditoría."""
+    if _empaque_deny_if_not_admin():
+        return redirect(url_for('empaque_resumen'))
+    k = EmpaqueKit.query.get(id_kit)
+    if not k:
+        flash('Kit no encontrado.', 'danger')
+    else:
+        db.session.delete(k)
+        db.session.commit()
+        flash('Fila de kit eliminada.', 'success')
+    return redirect(url_for('empaque_catalogo', seccion='kits'))
+
+
+# ---------------------------------------------------------------------
+# Carga masiva
+# ---------------------------------------------------------------------
+
+# Plantillas Excel descargables (vacías, con encabezados).
+_EMPAQUE_PLANTILLAS_COLUMNAS = {
+    # tipo -> (nombre_base, columnas ordenadas, comentario de hoja)
+    'articulos': (
+        'Plantilla_Catalogo_Empaque',
+        ['codigo', 'nombre', 'categoria', 'UM', 'almacen', 'stock_minimo', 'fisico_dynamics', 'activo'],
+        (
+            'Carga de catálogo de artículos de empaque.\n'
+            '- codigo: único, 20 caracteres máximo (ej. IN00120071).\n'
+            '- nombre: único, no se duplica.\n'
+            '- categoria: nombre EXACTO (sensible a mayúsculas/minúsculas) de una categoría existente\n'
+            '  o creada previamente en Catálogos · Categorías. Vacío = sin categoría.\n'
+            '- UM: "Pz" o "Kg" (sensible a mayúsculas/minúsculas).\n'
+            '- almacen: default CP005 si se deja vacío.\n'
+            '- stock_minimo y fisico_dynamics: números. Vacíos se dejan NULL (opcionales).\n'
+            '- activo: 1 = sí, 0 = no. Default 1.'
+        ),
+    ),
+    'entradas': (
+        'Plantilla_Entradas_Empaque',
+        ['codigo', 'cantidad', 'fecha', 'proveedor', 'rechazos', 'comentario'],
+        (
+            'Carga de entradas históricas de empaque.\n'
+            '- codigo: debe existir previamente en el catálogo de artículos.\n'
+            '- cantidad: > 0. Para Pz debe ser entera; para Kg se permiten hasta 3 decimales.\n'
+            '- fecha: YYYY-MM-DD. No futura.\n'
+            '- proveedor: nombre EXACTO de un proveedor existente o dado de alta antes.\n'
+            '- rechazos: >= 0 y <= cantidad. Default 0 si se deja vacío.\n'
+            '- comentario: texto libre (opcional).'
+        ),
+    ),
+    'salidas': (
+        'Plantilla_Salidas_Empaque',
+        ['codigo', 'cantidad', 'fecha', 'area', 'lote', 'comentario'],
+        (
+            'Carga de salidas históricas de empaque.\n'
+            '- codigo: debe existir previamente en el catálogo de artículos.\n'
+            '- cantidad: > 0 y debe haber stock suficiente (se valida TODO antes de guardar).\n'
+            '- fecha: YYYY-MM-DD. No futura.\n'
+            '- area: nombre EXACTO de un área existente.\n'
+            '- lote: código del lote de pulpa EXISTENTE en SICSE (SÓLO si área es Pulpa;\n'
+            '  en ese caso OBLIGATORIO). Para otras áreas dejar vacío.'
+        ),
+    ),
+    'dynamics': (
+        'Plantilla_Conciliacion_Dynamics',
+        ['codigo', 'fisico_dynamics'],
+        (
+            'Conciliación con Dynamics.\n'
+            '- codigo: artículo existente.\n'
+            '- fisico_dynamics: número oficial de Dynamics. Puede ser positivo o negativo.\n'
+            '  Se actualiza ÚNICAMENTE el campo fisico_dynamics; NO se tocan movimientos ni stock interno.'
+        ),
+    ),
+}
+
+
+@app.route('/embarques/empaque/carga/plantilla/<tipo>')
+@login_required
+def empaque_carga_masiva_plantilla(tipo):
+    """
+    Descarga una plantilla de Excel vacía con encabezados.
+    tipos soportados: articulos, entradas, salidas, dynamics.
+    """
+    if _empaque_deny_if_not_admin():
+        return redirect(url_for('empaque_resumen'))
+    tipo = (tipo or '').strip().lower()
+    if tipo not in _EMPAQUE_PLANTILLAS_COLUMNAS:
+        flash('Plantilla no válida.', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='carga_masiva'))
+    nombre_base, cols, comentario = _EMPAQUE_PLANTILLAS_COLUMNAS[tipo]
+    # Una hoja con los encabezados + una hoja con instrucciones.
+    df = pd.DataFrame(columns=cols)
+    comentarios_filas = [[cols[i], comentario] for i in range(len(cols))]
+    # Para tipos artículos/entradas/salidas agregamos una fila de ejemplo vacía
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Plantilla')
+        # Ancho automático básico
+        ws = writer.sheets['Plantilla']
+        for i, c in enumerate(cols, start=1):
+            ws.column_dimensions[chr(64 + i) if i <= 26 else 'A' + chr(64 + i - 26)].width = max(18, len(c) + 4)
+        pd.DataFrame(
+            [['Campo', 'Descripción']] + comentarios_filas,
+            columns=None
+        ).to_excel(writer, index=False, header=False, sheet_name='Instrucciones')
+    output.seek(0)
+    filename = f'{nombre_base}.xlsx'
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=filename,
+    )
+
+@app.route('/embarques/empaque/carga/articulos', methods=['POST'])
+@login_required
+def empaque_carga_masiva_articulos():
+    """
+    Carga masiva de artículos. Flujo:
+      1. Recibe Excel.
+      2. VALIDA TODO fila por fila.
+      3. Guarda el resultado en SESIÓN y redirige a Catálogo con vista previa:
+          - Sección: lista de filas correctas (checkbox aplicar)
+          - Reporte descargable de rechazados (Excel con columna "error")
+          - Botón "Aplicar filas correctas" que inserta en transacción.
+    """
+    if _empaque_deny_if_not_admin():
+        return redirect(url_for('empaque_resumen'))
+
+    archivo = request.files.get('archivo')
+    if not archivo or not archivo.filename:
+        flash('No seleccionaste ningún archivo.', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='carga_masiva'))
+    if not archivo.filename.lower().endswith(('.xlsx', '.xls')):
+        flash('Formato no válido: sube un archivo .xlsx o .xls.', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='carga_masiva'))
+
+    try:
+        df = pd.read_excel(archivo, dtype=str)
+        # Normaliza nombres de columnas (quita espacios, pasa a minúsculas para comparar
+        # pero luego usamos la columna correcta).
+        df.columns = [str(c).strip() for c in df.columns]
+        cols_necesarias = ['codigo', 'nombre', 'UM']
+        faltan = [c for c in cols_necesarias if c not in df.columns]
+        if faltan:
+            flash(f'Faltan columnas obligatorias: {", ".join(faltan)}', 'danger')
+            return redirect(url_for('empaque_catalogo', seccion='carga_masiva'))
+    except Exception as ex:
+        flash(f'No se pudo leer el archivo: {ex}', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='carga_masiva'))
+
+    # Precacheo catálogos para O(1) lookup en validación
+    categorias_map = {c.nombre: c.id_categoria for c in EmpaqueCategoria.query.all()}
+    codigos_bd = {a.codigo for a in EmpaqueArticulo.query.with_entities(EmpaqueArticulo.codigo).all()}
+    nombres_bd_lower = {a.nombre.lower(): a.codigo for a in EmpaqueArticulo.query.with_entities(
+        EmpaqueArticulo.codigo, EmpaqueArticulo.nombre).all()}
+
+    correctas = []       # lista dict para insertar
+    rechazadas = []      # lista dict con 'error'
+    fecha_hoy = date.today()
+    for idx, row in df.iterrows():
+        n_fila = idx + 2   # +1 por encabezado, +1 base 1
+        # Limpiar celdas
+        vals = {c: (str(row[c]).strip() if pd.notna(row[c]) else '') for c in df.columns}
+        codigo = vals.get('codigo', '').upper()
+        nombre = _validar_y_normalizar_texto(vals.get('nombre'), mayusculas=False) or ''
+        categoria_nombre = vals.get('categoria', '').strip()
+        um = vals.get('UM', '').strip()
+        almacen = vals.get('almacen', '').strip() or 'CP005'
+        sm = vals.get('stock_minimo', '').strip()
+        fd = vals.get('fisico_dynamics', '').strip()
+        activo_raw = vals.get('activo', '1').strip()
+
+        errores = []
+        # Código
+        if not codigo:
+            errores.append('Código vacío.')
+        elif len(codigo) > 20:
+            errores.append('Código > 20 caracteres.')
+        elif codigo in codigos_bd:
+            errores.append(f'Código {codigo} ya existe en la BD.')
+        # Nombre
+        if not nombre:
+            errores.append('Nombre vacío.')
+        elif nombre.lower() in nombres_bd_lower and nombres_bd_lower[nombre.lower()] != codigo:
+            errores.append('Nombre duplicado.')
+        # UM
+        if um not in ('Pz', 'Kg'):
+            errores.append('UM debe ser "Pz" o "Kg".')
+        # Categoría
+        id_categoria = None
+        if categoria_nombre:
+            if categoria_nombre in categorias_map:
+                id_categoria = categorias_map[categoria_nombre]
+            else:
+                errores.append(f'Categoría "{categoria_nombre}" no existe en Catálogos · Categorías.')
+        # Stock mínimo
+        stock_minimo = None
+        if sm:
+            try:
+                d = Decimal(sm)
+                if d < 0:
+                    errores.append('stock_minimo no puede ser negativo.')
+                else:
+                    stock_minimo = d
+            except Exception:
+                errores.append('stock_minimo no es numérico.')
+        # Físico Dynamics
+        fisico_dynamics = None
+        if fd:
+            try:
+                fisico_dynamics = Decimal(fd)
+            except Exception:
+                errores.append('fisico_dynamics no es numérico.')
+        # Activo
+        activo = True
+        if activo_raw != '' and activo_raw not in ('1', '0'):
+            try:
+                activo = bool(int(activo_raw))
+            except Exception:
+                errores.append('activo debe ser 1 o 0.')
+        elif activo_raw == '0':
+            activo = False
+
+        fila_salida = {
+            'fila': n_fila,
+            'codigo': codigo,
+            'nombre': nombre,
+            'categoria': categoria_nombre,
+            'UM': um,
+            'almacen': almacen,
+            'stock_minimo': sm,
+            'fisico_dynamics': fd,
+            'activo': '1' if activo else '0',
+        }
+        if errores:
+            fila_salida['error'] = ' | '.join(errores)
+            rechazadas.append(fila_salida)
+        else:
+            fila_salida['id_categoria'] = id_categoria
+            fila_salida['_stock_minimo'] = float(stock_minimo) if stock_minimo is not None else None
+            fila_salida['_fisico_dynamics'] = float(fisico_dynamics) if fisico_dynamics is not None else None
+            fila_salida['activo'] = activo
+            correctas.append(fila_salida)
+            # Evitar duplicados INTERNOS dentro del mismo archivo
+            codigos_bd.add(codigo)
+            nombres_bd_lower[nombre.lower()] = codigo
+
+    # Guardar en sesión para poder mostrar preview y aplicar luego
+    session['empaque_carga_articulos'] = {
+        'correctas': correctas,
+        'rechazadas': rechazadas,
+        'fecha': fecha_hoy.isoformat(),
+        'archivo': archivo.filename,
+    }
+    msg = f'Archivo procesado: {len(correctas)} filas OK, {len(rechazadas)} rechazadas.'
+    if correctas:
+        flash(msg + ' Revisa la vista previa y aplica las filas correctas.', 'info')
+    else:
+        flash(msg + ' No hay filas para aplicar.', 'warning')
+    return redirect(url_for('empaque_catalogo', seccion='carga_masiva') + '#sec-carga_masiva')
+
+
+@app.route('/embarques/empaque/carga/articulos/aplicar', methods=['POST'])
+@login_required
+def empaque_carga_masiva_articulos_aplicar():
+    """
+    Toma el listado guardado en sesión y aplica (inserta) las filas marcadas
+    o todas si no se marca ninguna. Regresa reporte final.
+    """
+    if _empaque_deny_if_not_admin():
+        return redirect(url_for('empaque_resumen'))
+    data = session.get('empaque_carga_articulos')
+    if not data or not data.get('correctas'):
+        flash('No hay un lote pendiente para aplicar.', 'warning')
+        return redirect(url_for('empaque_catalogo', seccion='carga_masiva'))
+
+    # Si el usuario marcó filas con checkbox 'aplicar_<idx>'
+    indices_aplicar = request.form.getlist('aplicar')
+    if indices_aplicar:
+        indices_aplicar = {int(i) for i in indices_aplicar if i.isdigit()}
+        filas = [f for i, f in enumerate(data['correctas']) if i in indices_aplicar]
+    else:
+        filas = data['correctas']
+
+    insertados = 0
+    fallidos = []
+    for f in filas:
+        try:
+            nuevo = EmpaqueArticulo(
+                codigo=f['codigo'],
+                nombre=f['nombre'],
+                id_categoria=f.get('id_categoria'),
+                um=f['UM'],
+                almacen=f['almacen'] or 'CP005',
+                stock_minimo=Decimal(str(f['_stock_minimo'])) if f.get('_stock_minimo') is not None else None,
+                fisico_dynamics=Decimal(str(f['_fisico_dynamics'])) if f.get('_fisico_dynamics') is not None else None,
+                activo=bool(f['activo']),
+            )
+            db.session.add(nuevo)
+            insertados += 1
+        except Exception as ex:
+            fallidos.append({'fila': f.get('fila'), 'codigo': f['codigo'], 'error': str(ex)})
+
+    try:
+        db.session.commit()
+    except Exception as ex:
+        db.session.rollback()
+        flash(f'Error al guardar lote: {ex}', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='carga_masiva') + '#sec-carga_masiva')
+
+    # Limpiar sesión al final
+    del session['empaque_carga_articulos']
+    session.modified = True
+
+    if fallidos:
+        flash(f'Se insertaron {insertados} artículos. {len(fallidos)} fallaron durante commit.', 'warning')
+    else:
+        flash(f'Se insertaron {insertados} artículos correctamente.', 'success')
+    return redirect(url_for('empaque_catalogo', seccion='carga_masiva') + '#sec-carga_masiva')
+
+
+@app.route('/embarques/empaque/carga/articulos/rechazados.xlsx')
+@login_required
+def empaque_carga_masiva_articulos_rechazados():
+    """Descarga el reporte de filas rechazadas con su error."""
+    if _empaque_deny_if_not_admin():
+        return redirect(url_for('empaque_resumen'))
+    data = session.get('empaque_carga_articulos') or {}
+    rechazadas = data.get('rechazadas') or []
+    cols = ['fila', 'codigo', 'nombre', 'categoria', 'UM', 'almacen', 'stock_minimo', 'fisico_dynamics', 'activo', 'error']
+    df = pd.DataFrame(rechazadas, columns=cols)
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Rechazados')
+    output.seek(0)
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name='Reporte_Rechazados_Catalogo_Empaque.xlsx',
+    )
+
+
+@app.route('/embarques/empaque/carga/movimientos', methods=['POST'])
+@login_required
+def empaque_carga_masiva_movimientos():
+    """
+    Carga masiva de entradas o salidas históricas.
+
+    Parámetro oculto 'tipo' con valor 'entradas' o 'salidas'
+    Flujo idéntico a artículos: validar -> sesión -> preview -> aplicar.
+
+    Reglas de negocio:
+      - Entradas: artículo existe, proveedor existe, cantidad > 0,
+        rechazos >= 0 y <= cantidad, fecha no futura, UM coherente.
+      - Salidas: además stock suficiente (válido acumulando lo que
+        venía en BD + lo que va del archivo), área existe,
+        lote obligatorio si área es Pulpa.
+      - Todo se valida antes de guardar; si una fila falla no
+        bloquea las demás (se reporta); las salidas se validan
+        contra stock acumulando todo el archivo.
+    """
+    if _empaque_deny_if_not_admin():
+        return redirect(url_for('empaque_resumen'))
+
+    archivo = request.files.get('archivo')
+    tipo = (request.form.get('tipo') or '').strip().lower()
+    if tipo not in ('entradas', 'salidas'):
+        flash('Tipo de carga no válido (debe ser entradas o salidas).', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='carga_masiva') + '#sec-carga_masiva')
+    if not archivo or not archivo.filename:
+        flash('No seleccionaste ningún archivo.', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='carga_masiva') + '#sec-carga_masiva')
+    if not archivo.filename.lower().endswith(('.xlsx', '.xls')):
+        flash('Formato no válido: sube un archivo .xlsx o .xls.', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='carga_masiva') + '#sec-carga_masiva')
+
+    try:
+        df = pd.read_excel(archivo, dtype=str)
+        df.columns = [str(c).strip() for c in df.columns]
+        if tipo == 'entradas':
+            cols_necesarias = ['codigo', 'cantidad', 'fecha', 'proveedor']
+        else:
+            cols_necesarias = ['codigo', 'cantidad', 'fecha', 'area']
+        faltan = [c for c in cols_necesarias if c not in df.columns]
+        if faltan:
+            flash(f'Faltan columnas obligatorias: {", ".join(faltan)}', 'danger')
+            return redirect(url_for('empaque_catalogo', seccion='carga_masiva') + '#sec-carga_masiva')
+    except Exception as ex:
+        flash(f'No se pudo leer el archivo: {ex}', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='carga_masiva') + '#sec-carga_masiva')
+
+    # Precacheos
+    articulos_db = {a.codigo: a for a in EmpaqueArticulo.query.all()}
+    proveedores_db = {p.nombre: p.id_proveedor for p in EmpaqueProveedor.query.all()}
+    areas_db = {a.nombre: a for a in EmpaqueArea.query.all()}
+    lotes_db = {l.codigo_lote: l.id_lote for l in Lote.query.all()}
+    fecha_hoy = date.today()
+    # Stock acumulativo para validar salidas secuencialmente contra la nueva carga
+    stock_actual_bd = _empaque_calcular_stock_batch(list(articulos_db.keys()))
+    # Clon mutable con Decimal
+    stock_corrido = {k: Decimal(str(v)) for k, v in stock_actual_bd.items()}
+
+    correctas = []
+    rechazadas = []
+    cols_reportes = (
+        ['fila', 'codigo', 'cantidad', 'fecha', 'proveedor', 'rechazos', 'comentario', 'error']
+        if tipo == 'entradas' else
+        ['fila', 'codigo', 'cantidad', 'fecha', 'area', 'lote', 'comentario', 'error']
+    )
+    for idx, row in df.iterrows():
+        n_fila = idx + 2
+        vals = {c: (str(row[c]).strip() if pd.notna(row[c]) else '') for c in df.columns}
+        errores = []
+        fila_base = {'fila': n_fila}
+        # Comunes
+        codigo = vals.get('codigo', '').strip()
+        art = articulos_db.get(codigo)
+        if not art:
+            errores.append(f'Artículo "{codigo}" no existe en el catálogo.')
+        else:
+            fila_base['codigo'] = codigo
+            fila_base['_um'] = art.um
+            fila_base['_articulo_activo'] = art.activo
+            if not art.activo:
+                errores.append('El artículo está inactivo.')
+
+        # Cantidad
+        cantidad = None
+        try:
+            cantidad = Decimal(vals.get('cantidad', '0') or '0')
+        except Exception:
+            errores.append('Cantidad no es numérica.')
+        if cantidad is not None and cantidad <= 0:
+            errores.append('Cantidad debe ser mayor a cero.')
+        fila_base['cantidad'] = vals.get('cantidad', '') or ''
+
+        # Fecha
+        fecha = _parse_date_or_none(vals.get('fecha', ''))
+        if not fecha:
+            errores.append('Fecha inválida (esperado YYYY-MM-DD).')
+        elif fecha > fecha_hoy:
+            errores.append('Fecha futura no permitida.')
+        fila_base['fecha'] = vals.get('fecha', '') or ''
+
+        # Validar cantidad por UM
+        if cantidad is not None and art:
+            ok, msg = _empaque_validar_cantidad_por_um(cantidad, art.um)
+            if not ok:
+                errores.append(msg)
+        fila_base['_cantidad'] = float(cantidad) if cantidad is not None else None
+
+        if tipo == 'entradas':
+            prov_nombre = vals.get('proveedor', '').strip()
+            id_proveedor = proveedores_db.get(prov_nombre)
+            fila_base['proveedor'] = prov_nombre
+            if not prov_nombre:
+                errores.append('Proveedor vacío.')
+            elif id_proveedor is None:
+                errores.append(f'Proveedor "{prov_nombre}" no existe en Catálogos · Proveedores.')
+            else:
+                fila_base['_id_proveedor'] = id_proveedor
+
+            rechazos_raw = vals.get('rechazos', '0').strip() or '0'
+            fila_base['rechazos'] = rechazos_raw
+            try:
+                rechazos = Decimal(rechazos_raw)
+                if rechazos < 0:
+                    errores.append('Rechazos no puede ser negativo.')
+                elif cantidad is not None and rechazos > cantidad:
+                    errores.append('Rechazos no puede ser mayor a la cantidad.')
+                fila_base['_rechazos'] = float(rechazos)
+            except Exception:
+                errores.append('Rechazos no es numérico.')
+
+            fila_base['comentario'] = vals.get('comentario', '') or ''
+
+        else:  # salidas
+            area_nombre = vals.get('area', '').strip()
+            fila_base['area'] = area_nombre
+            area = areas_db.get(area_nombre)
+            if not area_nombre:
+                errores.append('Área vacía.')
+            elif not area:
+                errores.append(f'Área "{area_nombre}" no existe en Catálogos · Áreas.')
+            else:
+                fila_base['_id_area'] = area.id_area
+                # Lote obligatorio si área es Pulpa
+                lote_codigo = vals.get('lote', '').strip()
+                fila_base['lote'] = lote_codigo
+                if area.nombre.lower() == 'pulpa':
+                    if not lote_codigo:
+                        errores.append('Para área Pulpa se requiere el código del lote.')
+                    elif lote_codigo not in lotes_db:
+                        errores.append(f'Lote "{lote_codigo}" no existe en SICSE.')
+                    else:
+                        fila_base['_id_lote'] = lotes_db[lote_codigo]
+                else:
+                    if lote_codigo:
+                        errores.append(f'Solo se permite lote cuando el área es Pulpa.')
+                    fila_base['_id_lote'] = None
+                fila_base['comentario'] = vals.get('comentario', '') or ''
+
+                # Stock suficiente (stock actual - salidas validadas previas)
+                if cantidad is not None and art:
+                    stock_previo = stock_corrido.get(codigo, Decimal('0'))
+                    if stock_previo < cantidad:
+                        errores.append(
+                            f'Stock insuficiente: quedan {empaque_format_numero(stock_previo, art.um)} {art.um}'
+                            f' y se intenta sacar {empaque_format_numero(cantidad, art.um)}.'
+                        )
+                    else:
+                        stock_corrido[codigo] = stock_previo - cantidad
+
+        if errores:
+            fila_base['error'] = ' | '.join(errores)
+            rechazadas.append(fila_base)
+        else:
+            correctas.append(fila_base)
+
+    # Guardar en sesión
+    clave_sesion = 'empaque_carga_movs_' + tipo
+    session[clave_sesion] = {
+        'tipo': tipo,
+        'correctas': correctas,
+        'rechazadas': rechazadas,
+        'fecha': fecha_hoy.isoformat(),
+        'archivo': archivo.filename,
+        'columnas_reporte': cols_reportes,
+    }
+    msg = f'Archivo procesado: {len(correctas)} filas OK, {len(rechazadas)} rechazadas.'
+    if correctas:
+        flash(msg + ' Revisa la vista previa y aplica las filas correctas.', 'info')
+    else:
+        flash(msg + ' No hay filas para aplicar.', 'warning')
+    return redirect(url_for('empaque_catalogo', seccion='carga_masiva') + '#sec-carga_masiva')
+
+
+@app.route('/embarques/empaque/carga/movimientos/aplicar/<tipo>', methods=['POST'])
+@login_required
+def empaque_carga_masiva_movimientos_aplicar(tipo):
+    """Aplica las filas correctas (o seleccionadas) de la última carga."""
+    if _empaque_deny_if_not_admin():
+        return redirect(url_for('empaque_resumen'))
+    tipo = (tipo or '').strip().lower()
+    if tipo not in ('entradas', 'salidas'):
+        flash('Tipo inválido.', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='carga_masiva') + '#sec-carga_masiva')
+
+    clave_sesion = 'empaque_carga_movs_' + tipo
+    data = session.get(clave_sesion)
+    if not data or not data.get('correctas'):
+        flash('No hay un lote pendiente para aplicar.', 'warning')
+        return redirect(url_for('empaque_catalogo', seccion='carga_masiva') + '#sec-carga_masiva')
+
+    indices_aplicar = request.form.getlist('aplicar')
+    if indices_aplicar:
+        s = {int(i) for i in indices_aplicar if i.isdigit()}
+        filas = [f for i, f in enumerate(data['correctas']) if i in s]
+    else:
+        filas = data['correctas']
+
+    insertados = 0
+    fallidos = []
+    # Salidas: usar transacción TODO O NADA para evitar descuadre
+    try:
+        for f in filas:
+            try:
+                if tipo == 'entradas':
+                    obj = EmpaqueEntrada(
+                        codigo=f['codigo'],
+                        cantidad=Decimal(str(f['_cantidad'])),
+                        fecha=_parse_date_or_none(f['fecha']) or date.today(),
+                        id_proveedor=f['_id_proveedor'],
+                        rechazos=Decimal(str(f.get('_rechazos') or 0)),
+                        comentario=f.get('comentario') or None,
+                        creado_por=current_user.id_usuario,
+                    )
+                else:
+                    # Salida: revalidar stock final a cierre (otras cargas concurrentes)
+                    art = EmpaqueArticulo.query.get(f['codigo'])
+                    if art:
+                        if art.stock_actual < Decimal(str(f['_cantidad'])):
+                            fallidos.append({
+                                'fila': f.get('fila'),
+                                'codigo': f['codigo'],
+                                'error': f'Stock insuficiente en el momento de guardar (quedan {empaque_format_numero(art.stock_actual, art.um)} {art.um}).'
+                            })
+                            continue
+                    obj = EmpaqueSalida(
+                        codigo=f['codigo'],
+                        cantidad=Decimal(str(f['_cantidad'])),
+                        fecha=_parse_date_or_none(f['fecha']) or date.today(),
+                        id_area=f['_id_area'],
+                        id_lote=f.get('_id_lote'),
+                        comentario=f.get('comentario') or None,
+                        creado_por=current_user.id_usuario,
+                    )
+                db.session.add(obj)
+                insertados += 1
+            except Exception as ex:
+                fallidos.append({'fila': f.get('fila'), 'codigo': f.get('codigo'), 'error': str(ex)})
+        db.session.commit()
+    except Exception as ex:
+        db.session.rollback()
+        flash(f'Error al guardar: {ex}', 'danger')
+        return redirect(url_for('empaque_catalogo', seccion='carga_masiva') + '#sec-carga_masiva')
+
+    del session[clave_sesion]
+    session.modified = True
+    if fallidos:
+        flash(f'Se insertaron {insertados} movimientos. {len(fallidos)} fallaron.', 'warning')
+    else:
+        flash(f'Se insertaron {insertados} movimientos correctamente.', 'success')
+    return redirect(url_for('empaque_catalogo', seccion='carga_masiva') + '#sec-carga_masiva')
+
+
+@app.route('/embarques/empaque/carga/movimientos/rechazados/<tipo>.xlsx')
+@login_required
+def empaque_carga_masiva_movimientos_rechazados(tipo):
+    """Reporte descargable de filas rechazadas de movimientos."""
+    if _empaque_deny_if_not_admin():
+        return redirect(url_for('empaque_resumen'))
+    tipo = (tipo or '').strip().lower()
+    if tipo not in ('entradas', 'salidas'):
+        return ('Tipo inválido', 400)
+    data = session.get('empaque_carga_movs_' + tipo) or {}
+    cols = data.get('columnas_reporte') or ['fila', 'error']
+    df = pd.DataFrame(data.get('rechazadas') or [], columns=cols)
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Rechazados')
+    output.seek(0)
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=f'Reporte_Rechazados_{tipo.capitalize()}_Empaque.xlsx',
+    )
+
+
+# ---------------------------------------------------------------------
+# Conciliación Dynamics + Ajustes + Exportación
+# ---------------------------------------------------------------------
+@app.route('/embarques/empaque/conciliacion', methods=['GET', 'POST'])
+@login_required
+def empaque_conciliacion():
+    """
+    Vista previa y aplicación de conciliación (solo actualiza fisico_dynamics,
+    nunca modifica movimientos).
+    """
+    if _empaque_deny_if_not_admin():
+        return redirect(url_for('empaque_resumen'))
+    if request.method == 'POST':
+        file = request.files.get('archivo')
+        if not file or not file.filename:
+            flash('Selecciona un archivo Excel para conciliación.', 'error')
+            return redirect(url_for('empaque_catalogo', seccion='conciliacion'))
+        try:
+            df = pd.read_excel(file, dtype=str, keep_default_na=False)
+        except Exception as exc:
+            flash(f'No se pudo leer el archivo: {exc}', 'error')
+            return redirect(url_for('empaque_catalogo', seccion='conciliacion'))
+        cols = {c.strip().lower(): c for c in df.columns}
+        col_cod = cols.get('codigo') or cols.get('código') or cols.get('code')
+        col_val = cols.get('físico_dynamics') or cols.get('fisico_dynamics') or cols.get('fisico') or cols.get('dynamics')
+        if not col_cod or not col_val:
+            flash('El archivo requiere columnas "código" y "físico_dynamics".', 'error')
+            return redirect(url_for('empaque_catalogo', seccion='conciliacion'))
+        ok, fail = 0, []
+        for idx, row in df.iterrows():
+            fila_no = idx + 2
+            codigo = (row.get(col_cod) or '').strip()
+            raw = (row.get(col_val) or '').strip()
+            art = EmpaqueArticulo.query.get(codigo) if codigo else None
+            if not art:
+                fail.append(f'Fila {fila_no}: código "{codigo}" no existe.')
+                continue
+            if raw.lower() in ('', 'sin dato', 'n/a', 'null', 'none', '—'):
+                nuevo = None
+            else:
+                try:
+                    nuevo = _parse_decimal(raw)
+                except Exception:
+                    fail.append(f'Fila {fila_no}: valor "{raw}" no es numérico.')
+                    continue
+                if nuevo is None:
+                    fail.append(f'Fila {fila_no}: valor "{raw}" no es numérico.')
+                    continue
+            if art.fisico_dynamics != nuevo:
+                art.fisico_dynamics = nuevo
+                art.actualizado_en = datetime.utcnow()
+                ok += 1
+        db.session.commit()
+        msg = f'Conciliación aplicada: {ok} actualizado(s).'
+        if fail:
+            msg += f' {len(fail)} fila(s) ignorada(s). Primero: {fail[0]}'
+            session['empaque_conciliacion_rechazos'] = fail
+        flash(msg, 'success' if ok else 'info')
+    return redirect(url_for('empaque_catalogo', seccion='conciliacion'))
+
+
+@app.route('/embarques/empaque/ajuste', methods=['POST'])
+@login_required
+def empaque_registrar_ajuste():
+    """
+    Registra un ajuste (± cantidad) con motivo obligatorio.
+    Única vía de corrección de inventario.
+    """
+    if _empaque_deny_if_not_admin():
+        return redirect(url_for('empaque_resumen'))
+    codigo = (request.form.get('codigo') or '').strip()
+    cantidad_raw = (request.form.get('cantidad') or '').strip()
+    fecha_str = (request.form.get('fecha') or '').strip()
+    motivo = (request.form.get('motivo') or '').strip()
+    comentario = (request.form.get('comentario') or '').strip() or None
+
+    art = EmpaqueArticulo.query.get(codigo) if codigo else None
+    if not art or not art.activo:
+        flash('Artículo no válido.', 'error')
+        return redirect(url_for('empaque_catalogo', seccion='ajustes'))
+    if len(motivo) < 3:
+        flash('Motivo obligatorio (al menos 3 caracteres).', 'error')
+        return redirect(url_for('empaque_catalogo', seccion='ajustes'))
+
+    ok, cantidad, msg = _validar_cantidad_por_um(cantidad_raw, art.um, allow_negative=True)
+    if not ok:
+        flash(f'Cantidad: {msg}', 'error')
+        return redirect(url_for('empaque_catalogo', seccion='ajustes'))
+    if cantidad == 0:
+        flash('Cantidad del ajuste no puede ser cero (usa positivo para sumar, negativo para restar).', 'error')
+        return redirect(url_for('empaque_catalogo', seccion='ajustes'))
+
+    fecha_aj = _parse_date_or_none(fecha_str) or date.today()
+    if fecha_aj > date.today():
+        flash('Fecha no puede ser futura.', 'error')
+        return redirect(url_for('empaque_catalogo', seccion='ajustes'))
+
+    db.session.add(EmpaqueAjuste(
+        codigo=art.codigo,
+        cantidad=cantidad,
+        fecha=fecha_aj,
+        motivo=motivo,
+        comentario=comentario,
+        id_usuario=current_user.get_id(),
+    ))
+    db.session.commit()
+    signo = '+' if cantidad > 0 else ''
+    flash(f'Ajuste registrado: {art.nombre} · {signo}{_format_numero(cantidad, art.um)} {art.um}. Motivo: {motivo}.', 'success')
+    return redirect(url_for('empaque_catalogo', seccion='ajustes'))
+
+
+@app.route('/embarques/empaque/exportar/inventario')
+@login_required
+def empaque_exportar_inventario():
+    """Exporta el inventario actual a Excel."""
+    if _empaque_deny_if_not_admin():
+        return redirect(url_for('empaque_resumen'))
+    articulos = EmpaqueArticulo.query.order_by(EmpaqueArticulo.nombre).all()
+    cods = [a.codigo for a in articulos]
+    stock_map = _calcular_stock_batch(cods) if cods else {}
+    rows = []
+    for a in articulos:
+        stock = stock_map.get(a.codigo, 0)
+        dyn = a.fisico_dynamics
+        dif = (stock - dyn) if dyn is not None else None
+        minimo = a.stock_minimo if a.stock_minimo is not None else 0
+        _clave, etiq, _color = _estado_desde_valores(stock, dyn, dif, minimo)
+        rows.append({
+            'Código': a.codigo,
+            'Nombre': a.nombre,
+            'Categoría': a.categoria.nombre if a.categoria else '',
+            'UM': a.um,
+            'Almacén': a.almacen or '',
+            'Stock actual': float(stock),
+            'Físico Dynamics': (float(dyn) if dyn is not None else ''),
+            'Diferencia (interno - Dynamics)': (float(dif) if dif is not None else ''),
+            'Stock mínimo': (float(minimo) if minimo else ''),
+            'Estado': etiq,
+            'Activo': 'Sí' if a.activo else 'No',
+        })
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine='openpyxl') as w:
+        pd.DataFrame(rows).to_excel(w, index=False, sheet_name='Inventario')
+    out.seek(0)
+    nombre = f"inventario_empaque_{date.today().isoformat().replace('-', '')}.xlsx"
+    return send_file(out, as_attachment=True, download_name=nombre,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+@app.route('/embarques/empaque/exportar/movimientos')
+@login_required
+def empaque_exportar_movimientos():
+    """Exporta movimientos (entradas/salidas/ajustes) filtrados a Excel."""
+    if _empaque_deny_if_not_admin():
+        return redirect(url_for('empaque_resumen'))
+    q_desde = _parse_date_or_none((request.args.get('desde') or '').strip())
+    q_hasta = _parse_date_or_none((request.args.get('hasta') or '').strip())
+    q_tipo = (request.args.get('tipo') or 'todos').strip().lower()
+
+    def filtrar_fecha(q, col):
+        if q_desde:
+            q = q.filter(col >= q_desde)
+        if q_hasta:
+            q = q.filter(col <= q_hasta)
+        return q
+    rows = []
+    if q_tipo in ('todos', 'entrada'):
+        for e in filtrar_fecha(EmpaqueEntrada.query, EmpaqueEntrada.fecha).all():
+            rows.append((
+                e.fecha or date.min, 0,
+                'Entrada', e.codigo, e.articulo.nombre if e.articulo else '',
+                float(e.cantidad),
+                (e.proveedor.nombre if e.proveedor else ''),
+                e.usuario.usuario if e.usuario else '',
+                e.comentario or '',
+            ))
+    if q_tipo in ('todos', 'salida'):
+        for s in filtrar_fecha(EmpaqueSalida.query, EmpaqueSalida.fecha).all():
+            detalle = (s.area.nombre if s.area else '') + (f' · Lote {s.lote.codigo_lote}' if s.lote else '')
+            rows.append((
+                s.fecha or date.min, 1,
+                'Salida', s.codigo, s.articulo.nombre if s.articulo else '',
+                float(s.cantidad),
+                detalle,
+                s.usuario.usuario if s.usuario else '',
+                s.comentario or '',
+            ))
+    if q_tipo in ('todos', 'ajuste'):
+        for a in filtrar_fecha(EmpaqueAjuste.query, EmpaqueAjuste.fecha).all():
+            rows.append((
+                a.fecha or date.min, 2,
+                'Ajuste', a.codigo, a.articulo.nombre if a.articulo else '',
+                float(a.cantidad),
+                a.motivo or '',
+                a.usuario.usuario if a.usuario else '',
+                a.comentario or '',
+            ))
+    rows.sort(key=lambda r: (r[0], r[1]), reverse=True)
+    tabla = []
+    for _f, _p, tipo, codigo, nombre, cantidad, detalle, usuario, comentario in rows:
+        tabla.append({
+            'Fecha': _f.isoformat() if _f and _f != date.min else '',
+            'Tipo': tipo,
+            'Código': codigo,
+            'Artículo': nombre,
+            'Cantidad': cantidad,
+            'Detalle (proveedor/área/lote/motivo)': detalle,
+            'Usuario': usuario,
+            'Comentario': comentario,
+        })
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine='openpyxl') as w:
+        pd.DataFrame(tabla).to_excel(w, index=False, sheet_name='Movimientos')
+    out.seek(0)
+    nombre = f"movimientos_empaque_{date.today().isoformat().replace('-', '')}.xlsx"
+    return send_file(out, as_attachment=True, download_name=nombre,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+# =====================================================================
+# ===== FIN RUTAS EMPAQUE =============================================
+# =====================================================================
+
 if __name__ == '__main__':
     debug = os.getenv('FLASK_DEBUG', '0').strip() in ('1', 'true', 'TRUE', 'yes', 'YES')
     port = int(os.getenv('PORT', 5000))
-    app.run(debug=debug, port=port)
+    host = os.getenv('HOST', '127.0.0.1')
+    from werkzeug.serving import run_simple
+    print(f"Iniciando SICSE en http://{host}:{port}/login", flush=True)
+    try:
+        with app.app_context():
+            conn = db.engine.connect()
+            conn.close()
+    except Exception as ex:
+        print("No se pudo conectar a la base de datos.", flush=True)
+        print(
+            "Revisa que MySQL esté encendido (XAMPP), y que tu .env tenga DATABASE_URL "
+            "o DB_USER/DB_PASSWORD/DB_HOST/DB_NAME correctos.",
+            flush=True,
+        )
+        print(f"Detalle: {ex}", flush=True)
+        raise
+    print("Arrancando servidor (si regresa inmediatamente, algo está deteniendo el proceso)...", flush=True)
+    run_simple(
+        hostname=host,
+        port=port,
+        application=app,
+        use_reloader=False,
+        use_debugger=debug,
+        threaded=True,
+    )
+    print("Servidor detenido.", flush=True)

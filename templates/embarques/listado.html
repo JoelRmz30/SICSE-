@@ -24,7 +24,7 @@
     <div class="col-md-4">
         <div class="card shadow-sm">
             <div class="card-body">
-                <div class="text-muted small mb-1">Embarques del mes</div>
+                <div class="text-muted small mb-1">Total de embarques</div>
                 <div class="fs-1 fw-semibold">{{ resumen.total_mes }}</div>
             </div>
         </div>
@@ -136,12 +136,16 @@
                             {% if emb.producto %}
                                 {% set desc = emb.producto.descripcion or '' %}
                                 {% if desc|length > 24 %}{{ desc[:22] }}..{% else %}{{ desc }}{% endif %}
+                            {% elif emb.producto_texto %}
+                                <span class="text-warning-emphasis">{{ emb.producto_texto[:24] }}</span>
                             {% endif %}
                         </td>
                         <td>
                             {% if emb.cliente %}
                                 {% set nom = (emb.cliente.codigo ~ ' - ' if emb.cliente.codigo else '') ~ emb.cliente.nombre_cliente %}
                                 {% if nom|length > 18 %}{{ nom[:16] }}..{% else %}{{ nom }}{% endif %}
+                            {% elif emb.cliente_texto %}
+                                <span class="text-warning-emphasis">{{ emb.cliente_texto[:22] }}</span>
                             {% endif %}
                         </td>
                         <td>{{ tipos_unidad_labels.get(emb.tipo_unidad, emb.tipo_unidad) }}</td>

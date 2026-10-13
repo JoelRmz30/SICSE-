@@ -94,7 +94,7 @@
                         </div>
                         <div class="row g-3 mt-1">
                             <div class="col-md-4">
-                                <label class="form-label" for="ticket">Ticket (opcional)</label>
+                                <label class="form-label" for="ticket">Ticket</label>
                                 <input type="text" id="ticket" name="ticket" class="form-control"
                                     pattern="{{ REGEX_TICKET }}"
                                     title="Formato: ALA0000000 (7 dígitos)"
@@ -103,7 +103,7 @@
                                 <div class="invalid-feedback">Si lo capturas, usa ALA + 7 dígitos.</div>
                             </div>
                             <div class="col-md-4">
-                                <label class="form-label" for="packing">Packing (opcional)</label>
+                                <label class="form-label" for="packing">Packing</label>
                                 <input type="text" id="packing" name="packing" class="form-control"
                                     pattern="{{ REGEX_PACKING }}"
                                     title="Formato: 2101-000000"
@@ -122,21 +122,50 @@
                         <div class="row g-3">
                             <div class="col-md-6">
                                 <label class="form-label" for="id_producto">Producto</label>
-                                <select class="form-select" id="id_producto" name="id_producto" required>
+                                <select class="form-select" id="id_producto" name="id_producto">
                                     <option value="">Selecciona...</option>
+                                    <option value="__nuevo__">✚ Agregar nuevo producto…</option>
                                     {% for p in catalogos.productos %}
                                     <option value="{{ p.id_producto }}"
                                         {% if embarque and embarque.id_producto == p.id_producto %}selected{% endif %}>
-                                        {{ p.descripcion }} {% if p.item %}<span class="text-muted small">({{ p.item }})</span>{% endif %}
+                                        {{ p.descripcion }}{% if p.item %} ({{ p.item }}){% endif %}
                                     </option>
                                     {% endfor %}
                                 </select>
-                                <div class="invalid-feedback">Elige un producto del catálogo.</div>
+                                <div class="mt-2 d-none" id="box_nuevo_producto">
+                                    <div class="p-3 border rounded bg-light">
+                                        <div class="row g-2">
+                                            <div class="col-md-8">
+                                                <label class="form-label small mb-1" for="nuevo_producto_descripcion">Descripción</label>
+                                                <input type="text" class="form-control form-control-sm" name="nuevo_producto_descripcion"
+                                                       id="nuevo_producto_descripcion" maxlength="255"
+                                                       placeholder="Nombre del producto">
+                                            </div>
+                                            <div class="col-md-4">
+                                                <label class="form-label small mb-1" for="nuevo_producto_tipo">Tipo</label>
+                                                <select class="form-select form-select-sm" name="nuevo_producto_tipo" id="nuevo_producto_tipo">
+                                                    <option value="concentrado">Concentrado</option>
+                                                    <option value="pulpa">Pulpa</option>
+                                                    <option value="colateral">Colateral</option>
+                                                </select>
+                                            </div>
+                                            <div class="col-md-4">
+                                                <label class="form-label small mb-1" for="nuevo_producto_um">Unidad de medida</label>
+                                                <select class="form-select form-select-sm" name="nuevo_producto_um" id="nuevo_producto_um">
+                                                    <option value="KG">KG</option>
+                                                    <option value="TAZ">TAZ</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <small class="text-muted">El número de item se genera automáticamente; el admin puede editarlo en Catálogos.</small>
+                                    </div>
+                                </div>
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label" for="id_cliente">Cliente / destino</label>
-                                <select class="form-select" id="id_cliente" name="id_cliente" required>
+                                <select class="form-select" id="id_cliente" name="id_cliente">
                                     <option value="">Selecciona...</option>
+                                    <option value="__nuevo__">✚ Agregar nuevo cliente…</option>
                                     {% for c in catalogos.clientes %}
                                     <option value="{{ c.id_cliente }}"
                                         {% if embarque and embarque.id_cliente == c.id_cliente %}selected{% endif %}>
@@ -144,7 +173,15 @@
                                     </option>
                                     {% endfor %}
                                 </select>
-                                <div class="invalid-feedback">Elige un cliente del catálogo.</div>
+                                <div class="mt-2 d-none" id="box_nuevo_cliente">
+                                    <div class="input-group input-group-sm">
+                                        <span class="input-group-text"><i class="bi bi-building"></i></span>
+                                        <input type="text" class="form-control" name="nuevo_cliente_nombre"
+                                               id="nuevo_cliente_nombre" maxlength="200"
+                                               placeholder="Nombre del nuevo cliente">
+                                    </div>
+                                    <small class="text-muted">Se guardará automáticamente en el catálogo al guardar el embarque.</small>
+                                </div>
                             </div>
                         </div>
                         <div class="row g-3 mt-1">
@@ -209,6 +246,7 @@
                                 <label class="form-label" for="id_transportista">Transportista</label>
                                 <select class="form-select" id="id_transportista" name="id_transportista">
                                     <option value="">Ninguno</option>
+                                    <option value="__nuevo__">✚ Agregar nuevo transportista…</option>
                                     {% for t in catalogos.transportistas %}
                                     <option value="{{ t.id_transportista }}"
                                         {% if embarque and embarque.id_transportista == t.id_transportista %}selected{% endif %}>
@@ -216,11 +254,21 @@
                                     </option>
                                     {% endfor %}
                                 </select>
+                                <div class="mt-2 d-none" id="box_nuevo_transportista">
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="bi bi-truck"></i></span>
+                                        <input type="text" class="form-control" name="nuevo_transportista_nombre"
+                                               id="nuevo_transportista_nombre" maxlength="200"
+                                               placeholder="Nombre del nuevo transportista">
+                                    </div>
+                                    <small class="text-muted">Se guardará automáticamente en el catálogo al guardar el embarque.</small>
+                                </div>
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label" for="id_operador">Operador</label>
                                 <select class="form-select" id="id_operador" name="id_operador">
                                     <option value="">Ninguno</option>
+                                    <option value="__nuevo__">✚ Agregar nuevo operador…</option>
                                     {% for o in catalogos.operadores %}
                                     <option value="{{ o.id_operador }}"
                                         {% if embarque and embarque.id_operador == o.id_operador %}selected{% endif %}>
@@ -228,11 +276,21 @@
                                     </option>
                                     {% endfor %}
                                 </select>
+                                <div class="mt-2 d-none" id="box_nuevo_operador">
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="bi bi-person-vcard"></i></span>
+                                        <input type="text" class="form-control" name="nuevo_operador_nombre"
+                                               id="nuevo_operador_nombre" maxlength="200"
+                                               placeholder="Nombre del nuevo operador / chofer">
+                                    </div>
+                                    <small class="text-muted">Se guardará automáticamente en el catálogo al guardar el embarque.</small>
+                                </div>
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label" for="id_tractor">Tractor</label>
                                 <select class="form-select" id="id_tractor" name="id_tractor">
                                     <option value="">Ninguno</option>
+                                    <option value="__nuevo__">✚ Agregar nuevo tractor…</option>
                                     {% for u in catalogos.tractores %}
                                     <option value="{{ u.id_unidad }}"
                                         {% if embarque and embarque.id_tractor == u.id_unidad %}selected{% endif %}>
@@ -240,11 +298,21 @@
                                     </option>
                                     {% endfor %}
                                 </select>
+                                <div class="mt-2 d-none" id="box_nuevo_tractor">
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="bi bi-truck"></i></span>
+                                        <input type="text" class="form-control text-uppercase" name="nuevo_tractor_placa"
+                                               id="nuevo_tractor_placa" maxlength="30"
+                                               placeholder="Placa del nuevo tractor (ej. ABC-12-34)">
+                                    </div>
+                                    <small class="text-muted">Se guardará automáticamente en el catálogo al guardar el embarque.</small>
+                                </div>
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label" for="id_remolque">Remolque</label>
                                 <select class="form-select" id="id_remolque" name="id_remolque">
                                     <option value="">Ninguno</option>
+                                    <option value="__nuevo__">✚ Agregar nuevo remolque…</option>
                                     {% for u in catalogos.remolques %}
                                     <option value="{{ u.id_unidad }}"
                                         {% if embarque and embarque.id_remolque == u.id_unidad %}selected{% endif %}>
@@ -252,21 +320,48 @@
                                     </option>
                                     {% endfor %}
                                 </select>
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label" for="id_facilitador">Facilitador</label>
-                                <select class="form-select" id="id_facilitador" name="id_facilitador">
-                                    <option value="">Ninguno</option>
-                                    {% for f in catalogos.facilitadores %}
-                                    <option value="{{ f.id_facilitador }}"
-                                        {% if embarque and embarque.id_facilitador == f.id_facilitador %}selected{% endif %}>
-                                        {{ f.nombre }}
-                                    </option>
-                                    {% endfor %}
-                                </select>
+                                <div class="mt-2 d-none" id="box_nuevo_remolque">
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="bi bi-box-seam"></i></span>
+                                        <input type="text" class="form-control text-uppercase" name="nuevo_remolque_placa"
+                                               id="nuevo_remolque_placa" maxlength="30"
+                                               placeholder="Placa del nuevo remolque (ej. REM-12-34)">
+                                    </div>
+                                    <small class="text-muted">Se guardará automáticamente en el catálogo al guardar el embarque.</small>
+                                </div>
                             </div>
                         </div>
                     </fieldset>
+                    <script>
+                    (function(){
+                        function armarToggle(selectId, boxId){
+                            const sel = document.getElementById(selectId);
+                            const box = document.getElementById(boxId);
+                            function toggle(){
+                                const esNuevo = sel && sel.value === '__nuevo__';
+                                if (esNuevo){
+                                    box.classList.remove('d-none');
+                                } else {
+                                    box.classList.add('d-none');
+                                }
+                                // Marcar required solo cuando está visible
+                                const inputs = box ? box.querySelectorAll('input, select') : [];
+                                inputs.forEach(inp => {
+                                    inp.required = esNuevo;
+                                    if (!esNuevo && inp.type === 'text') inp.value = '';
+                                });
+                            }
+                            if (sel) sel.addEventListener('change', toggle);
+                            toggle();
+                        }
+                        armarToggle('id_producto', 'box_nuevo_producto');
+                        armarToggle('id_cliente', 'box_nuevo_cliente');
+                        armarToggle('id_transportista', 'box_nuevo_transportista');
+                        armarToggle('id_operador', 'box_nuevo_operador');
+                        armarToggle('id_tractor', 'box_nuevo_tractor');
+                        armarToggle('id_remolque', 'box_nuevo_remolque');
+                    })();
+                    </script>
 
                     {# ================= SECCIÓN 4: DETALLE SEGÚN UNIDAD #}
                     <fieldset class="mb-4">
@@ -356,12 +451,12 @@
                         </legend>
                         <div class="row g-3">
                             {% set tiempos_nombres = [
-                                ('t_llegada', 'llegada', 'Llegada'),
-                                ('t_entrada', 'entrada', 'Entrada'),
-                                ('t_pesado_inicial', 'pesado_inicial', 'Pesado inicial'),
-                                ('t_pesaje_salida', 'pesaje_salida', 'Pesaje salida'),
-                                ('t_documentacion', 'documentacion', 'Documentación'),
-                                ('t_salida', 'salida', 'Salida'),
+                                ('t_llegada', 'llegada', 'Fecha y hora Registro llegada planta'),
+                                ('t_entrada', 'entrada', 'Fecha y hora de entrada a planta'),
+                                ('t_pesado_inicial', 'pesado_inicial', 'Pesado Inicial de la Unidad'),
+                                ('t_pesaje_salida', 'pesaje_salida', 'Pesaje de Salida'),
+                                ('t_documentacion', 'documentacion', 'Fecha y hora de documentación'),
+                                ('t_salida', 'salida', 'Fecha y hora de salida de Planta'),
                             ] %}
                             {% for fname, attrname, flabel in tiempos_nombres %}
                             <div class="col-md-4">
@@ -588,13 +683,40 @@ document.getElementById('form-embarque').addEventListener('submit', function(e) 
     if (!this.checkValidity()) {
         e.preventDefault();
         e.stopPropagation();
+        this.classList.add('was-validated');
+        return;
     }
     // 2) lotes
     const filasLotes = document.querySelectorAll('#tbody-lotes > tr');
     if (filasLotes.length === 0) {
         e.preventDefault();
+        this.classList.add('was-validated');
         document.getElementById('alert-lotes').classList.remove('d-none');
         flash('Agrega al menos un lote.', 'danger');
+        return;
+    }
+    // 3) Confirmar si faltan datos opcionales
+    const faltan = [];
+    const val = id => (document.getElementById(id).value || '').trim();
+    const sel = id => {
+        const el = document.getElementById(id);
+        return el ? (el.value || '').trim() : '';
+    };
+    if (!val('ticket')) faltan.push('Ticket');
+    if (!val('packing')) faltan.push('Packing');
+    if (!sel('id_producto')) faltan.push('Producto');
+    if (!sel('id_cliente')) faltan.push('Cliente');
+    if (!sel('id_transportista')) faltan.push('Transportista');
+    if (!sel('id_operador')) faltan.push('Operador');
+    if (!sel('id_tractor')) faltan.push('Tractor');
+    if (!sel('id_remolque')) faltan.push('Remolque');
+    if (faltan.length > 0) {
+        const msg = 'Faltan los siguientes datos: ' + faltan.join(', ') +
+                    '.\n¿Desea continuar sin ' + faltan.join(', ') + '?';
+        if (!confirm(msg)) {
+            e.preventDefault();
+            return;
+        }
     }
     this.classList.add('was-validated');
 });

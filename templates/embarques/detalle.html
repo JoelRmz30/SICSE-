@@ -147,6 +147,8 @@
                                 {% if emb.producto.item %}<span class="text-muted small">({{ emb.producto.item }})</span>{% endif %}
                                 {% if emb.producto.variedad %}<span class="text-muted small"> · {{ emb.producto.variedad }}</span>{% endif %}
                                 <span class="badge bg-light text-dark ms-1">{{ emb.producto.tipo or '' }}</span>
+                            {% elif emb.producto_texto %}
+                                {{ emb.producto_texto }} <span class="badge bg-warning text-dark ms-1">texto libre</span>
                             {% else %}-{% endif %}
                         </div>
                     </div>
@@ -155,6 +157,8 @@
                         <div class="fw-semibold">
                             {% if emb.cliente %}
                                 {% if emb.cliente.codigo %}[{{ emb.cliente.codigo }}] · {% endif %}{{ emb.cliente.nombre_cliente }}
+                            {% elif emb.cliente_texto %}
+                                {{ emb.cliente_texto }} <span class="badge bg-warning text-dark ms-1">texto libre</span>
                             {% else %}-{% endif %}
                         </div>
                     </div>
@@ -242,10 +246,6 @@
                         <div class="fw-semibold">{{ emb.operador.nombre if emb.operador else '-' }}</div>
                     </div>
                     <div class="col-md-4">
-                        <div class="small text-muted">Facilitador</div>
-                        <div class="fw-semibold">{{ emb.facilitador.nombre if emb.facilitador else '-' }}</div>
-                    </div>
-                    <div class="col-md-4">
                         <div class="small text-muted">Tractor</div>
                         <div class="fw-semibold">{{ emb.tractor.placa if emb.tractor else '-' }}</div>
                     </div>
@@ -329,12 +329,12 @@
                 {% set orden_ok, orden_msg = tiempos.tiempos_ordenados() %}
                 <div class="row g-3 mb-3">
                     {% set tdefs = [
-                        ('llegada','Llegada', tiempos.llegada),
-                        ('entrada','Entrada', tiempos.entrada),
-                        ('pesado_inicial','Pesado inicial', tiempos.pesado_inicial),
-                        ('pesaje_salida','Pesaje salida', tiempos.pesaje_salida),
-                        ('documentacion','Documentación', tiempos.documentacion),
-                        ('salida','Salida', tiempos.salida),
+                        ('llegada','Fecha y hora Registro llegada planta', tiempos.llegada),
+                        ('entrada','Fecha y hora de entrada a planta', tiempos.entrada),
+                        ('pesado_inicial','Pesado Inicial de la Unidad', tiempos.pesado_inicial),
+                        ('pesaje_salida','Pesaje de Salida', tiempos.pesaje_salida),
+                        ('documentacion','Fecha y hora de documentación', tiempos.documentacion),
+                        ('salida','Fecha y hora de salida de Planta', tiempos.salida),
                     ] %}
                     {% for _k, lab, val in tdefs %}
                     <div class="col-md-4">
