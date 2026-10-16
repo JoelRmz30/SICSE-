@@ -1,0 +1,174 @@
+{# ==========================================================================
+   Configuración de Tanques de Proceso (TQPF).
+   Alta, edición, activar/desactivar y eliminar tanques. La eliminación se
+   bloquea si el tanque todavía tiene inventario asociado.
+   ========================================================================== #}
+{% extends "base.html" %}
+{% block title %}Configuración TQPF{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-xl-10 col-lg-11">
+
+        <div class="card shadow mb-4">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <h5 class="mb-0">
+                    <i class="bi bi-thermometer-half me-2"></i>Configuración de Tanques TQPF
+                </h5>
+                <a href="{{ url_for('inventario_tqpf') }}" class="btn btn-sm btn-outline-light">
+                    <i class="bi bi-box-seam me-1"></i>Ver inventario
+                </a>
+            </div>
+            <div class="card-body pt-3">
+                <p class="text-muted small mb-0">
+                    Configura la capacidad, tipo de producto y estado de cada tanque de proceso (TQPF).
+                </p>
+            </div>
+        </div>
+
+        {# Formulario de alta / edición #}
+        <div class="card shadow mb-4">
+            <div class="card-header bg-light fw-semibold d-flex justify-content-between align-items-center">
+                <span id="form-title">
+                    <i class="bi bi-plus-circle me-1"></i>Nuevo tanque
+                </span>
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-limpiar" style="display:none;">
+                    <i class="bi bi-x-lg me-1"></i>Cancelar edición
+                </button>
+            </div>
+            <div class="card-body">
+                <form method="POST" class="row g-3" id="form-tanque" novalidate>
+                    <input type="hidden" name="accion" value="guardar">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="id_tanque" id="id_tanque" value="">
+                    <div class="col-md-4">
+                        <label class="form-label" for="f-nombre_tanque">Nombre del tanque <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="f-nombre_tanque" name="nombre_tanque" required>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="f-capacidad_gal">Capacidad (galones)</label>
+                        <input type="number" step="0.01" min="0" class="form-control" id="f-capacidad_gal" name="capacidad_gal">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="f-tipo_producto">Tipo de producto</label>
+                        <input type="text" class="form-control" id="f-tipo_producto" name="tipo_producto" placeholder="Ej: Concentrado">
+                    </div>
+                    <div class="col-12 d-flex justify-content-end gap-2">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-save me-1"></i>Guardar
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        {# Tabla de tanques #}
+        <div class="card shadow">
+            <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                <span class="fw-semibold">
+                    <i class="bi bi-table me-1"></i>Tanques TQPF ({{ tanques|length }})
+                </span>
+                <span class="small text-muted">
+                    <span class="badge bg-success me-1">Activo</span>
+                    <span class="badge bg-secondary">Inactivo</span>
+                </span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light small text-muted">
+                            <tr>
+                                <th style="width:6%">ID</th>
+                                <th>Nombre</th>
+                                <th>Capacidad (gal)</th>
+                                <th>Tipo de producto</th>
+                                <th style="width:10%">Estado</th>
+                                <th style="width:26%" class="text-end">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for tanque in tanques %}
+                            <tr>
+                                <td class="text-muted">{{ tanque.id_tanque }}</td>
+                                <td>{{ tanque.nombre_tanque }}</td>
+                                <td>{{ tanque.capacidad_gal or '-' }}</td>
+                                <td>{{ tanque.tipo_producto or '-' }}</td>
+                                <td>
+                                    {% if tanque.estado == 'activo' %}
+                                    <span class="badge bg-success">Activo</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">Inactivo</span>
+                                    {% endif %}
+                                </td>
+                                <td class="text-end">
+                                    <button type="button" class="btn btn-sm btn-outline-primary btn-edit"
+                                        data-id="{{ tanque.id_tanque }}"
+                                        data-nombre_tanque="{{ tanque.nombre_tanque }}"
+                                        data-capacidad_gal="{{ tanque.capacidad_gal if tanque.capacidad_gal is not none else '' }}"
+                                        data-tipo_producto="{{ tanque.tipo_producto or '' }}">
+                                        <i class="bi bi-pencil me-1"></i>Editar
+                                    </button>
+                                    <form method="POST" class="d-inline" onsubmit="return confirm('¿Cambiar el estado del tanque {{ tanque.nombre_tanque }}?');">
+                                        <input type="hidden" name="accion" value="toggle">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <input type="hidden" name="id_tanque" value="{{ tanque.id_tanque }}">
+                                        <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                            {% if tanque.estado == 'activo' %}<i class="bi bi-power me-1"></i>Desactivar{% else %}<i class="bi bi-play me-1"></i>Activar{% endif %}
+                                        </button>
+                                    </form>
+                                    <form method="POST" class="d-inline" onsubmit="return confirm('¿Eliminar el tanque {{ tanque.nombre_tanque }}? Solo se permite si no tiene inventario.');">
+                                        <input type="hidden" name="accion" value="eliminar">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <input type="hidden" name="id_tanque" value="{{ tanque.id_tanque }}">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">
+                                            <i class="bi bi-trash me-1"></i>Eliminar
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="6" class="text-center text-muted py-4">
+                                    Aún no hay tanques registrados. Usa el formulario de arriba para agregar el primero.
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const form = document.getElementById('form-tanque');
+const titleForm = document.getElementById('form-title');
+const btnLimpiar = document.getElementById('btn-limpiar');
+const idTanqueInput = document.getElementById('id_tanque');
+
+document.querySelectorAll('.btn-edit').forEach(btn => {
+    btn.addEventListener('click', () => {
+        idTanqueInput.value = btn.dataset.id || '';
+        titleForm.innerHTML = '<i class="bi bi-pencil me-1"></i>Editar tanque';
+        btnLimpiar.style.display = '';
+        const campos = ['nombre_tanque', 'capacidad_gal', 'tipo_producto'];
+        campos.forEach(c => {
+            const inp = document.getElementById('f-' + c);
+            if (inp) inp.value = btn.dataset[c] || '';
+        });
+        window.scrollTo({ top: form.offsetTop - 80, behavior: 'smooth' });
+    });
+});
+
+btnLimpiar.addEventListener('click', () => {
+    form.reset();
+    idTanqueInput.value = '';
+    titleForm.innerHTML = '<i class="bi bi-plus-circle me-1"></i>Nuevo tanque';
+    btnLimpiar.style.display = 'none';
+});
+</script>
+{% endblock %}

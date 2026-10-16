@@ -43,10 +43,30 @@
                             </span>
                         </td>
                         <td>
-                            <button class="btn btn-sm btn-outline-primary"><i class="bi bi-pencil"></i></button>
-                            {% if usu.id_usuario != current_user.id_usuario %}
-                            <button class="btn btn-sm btn-outline-warning"><i class="bi bi-slash-circle"></i></button>
-                            {% endif %}
+                            <div class="d-flex gap-1 flex-wrap">
+                                <a href="{{ url_for('editar_usuario', id_usuario=usu.id_usuario) }}"
+                                   class="btn btn-sm btn-outline-primary" title="Editar usuario y permisos">
+                                    <i class="bi bi-pencil me-1"></i>Editar
+                                </a>
+                                {% if usu.id_usuario != current_user.id_usuario %}
+                                <form method="POST" action="{{ url_for('toggle_usuario', id_usuario=usu.id_usuario) }}" class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-sm btn-outline-warning"
+                                            title="{{ 'Desactivar' if usu.activo else 'Activar' }} usuario"
+                                            onclick="return confirm('¿{{ 'Desactivar' if usu.activo else 'Activar' }} el usuario {{ usu.usuario }}?');">
+                                        <i class="bi bi-slash-circle me-1"></i>{{ 'Desactivar' if usu.activo else 'Activar' }}
+                                    </button>
+                                </form>
+                                <form method="POST" action="{{ url_for('eliminar_usuario', id_usuario=usu.id_usuario) }}" class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-sm btn-danger"
+                                            title="Eliminar usuario"
+                                            onclick="return confirm('¿Eliminar el usuario {{ usu.usuario }}? Si tiene registros asociados, se desactivará en lugar de eliminarse.');">
+                                        <i class="bi bi-trash me-1"></i>Eliminar
+                                    </button>
+                                </form>
+                                {% endif %}
+                            </div>
                         </td>
                     </tr>
                     {% endfor %}

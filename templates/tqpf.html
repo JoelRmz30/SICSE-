@@ -1,0 +1,148 @@
+{# ==========================================================================
+   Inventario de Tanques de Proceso (TQPF).
+   Muestra el contenido de cada tanque (lote, Brix y galones), el total y el
+   porcentaje de ocupación. Permite registrar la entrada de un lote y vaciar
+   un lote del tanque. Es un inventario independiente del de silos.
+   ========================================================================== #}
+{% extends "base.html" %}
+{% block title %}Inventario TQPF{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-xl-10 col-lg-11">
+
+        {# Encabezado #}
+        <div class="card shadow mb-4">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <h5 class="mb-0">
+                    <i class="bi bi-thermometer-half me-2"></i>Inventario TQPF
+                </h5>
+                <span class="badge bg-light text-dark">
+                    Total: {{ '%.2f'|format(total_general) }} gal
+                </span>
+            </div>
+            <div class="card-body pt-3">
+                <p class="text-muted small mb-0">
+                    Tanques de proceso donde el producto permanece antes de pasar a los silos.
+                </p>
+            </div>
+        </div>
+
+        {# Formulario para registrar la entrada de un lote a un tanque #}
+        <div class="card shadow mb-4">
+            <div class="card-header bg-light fw-semibold">
+                <i class="bi bi-box-arrow-in-down me-1"></i>Registrar entrada de lote
+            </div>
+            <div class="card-body">
+                <form method="POST" class="row g-3" novalidate>
+                    <input type="hidden" name="accion" value="entrada">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="col-md-4">
+                        <label class="form-label" for="f-id_tanque">Tanque <span class="text-danger">*</span></label>
+                        <select class="form-select" id="f-id_tanque" name="id_tanque" required>
+                            <option value="">Selecciona un tanque…</option>
+                            {% for t in tanques %}
+                            <option value="{{ t.id_tanque }}" {% if t.estado != 'activo' %}disabled{% endif %}>
+                                {{ t.nombre_tanque }}{% if t.estado != 'activo' %} (inactivo){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="f-id_lote">Lote <span class="text-danger">*</span></label>
+                        <select class="form-select" id="f-id_lote" name="id_lote" required>
+                            <option value="">Selecciona un lote…</option>
+                            {% for l in lotes %}
+                            <option value="{{ l.id_lote }}" data-brix="{{ l.brix if l.brix is not none else '' }}">
+                                {{ l.codigo_lote }}{% if l.brix is not none %} · Brix {{ l.brix }}{% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" for="f-galones">Galones <span class="text-danger">*</span></label>
+                        <input type="number" step="0.01" min="0" class="form-control" id="f-galones" name="galones" required>
+                    </div>
+                    <div class="col-md-2 d-flex align-items-end">
+                        <button type="submit" class="btn btn-primary w-100">
+                            <i class="bi bi-plus-lg me-1"></i>Agregar
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        {# Tanques con su inventario #}
+        {% for t in tanques %}
+        {% set d = detalle[t.id_tanque] %}
+        <div class="card shadow mb-3">
+            <div class="card-header bg-light d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span class="fw-semibold">
+                    <i class="bi bi-droplet-half me-1"></i>{{ t.nombre_tanque }}
+                    {% if t.tipo_producto %}<span class="badge bg-info text-dark ms-1">{{ t.tipo_producto }}</span>{% endif %}
+                    {% if t.estado != 'activo' %}<span class="badge bg-secondary ms-1">Inactivo</span>{% endif %}
+                </span>
+                <span class="small text-muted">
+                    {{ '%.2f'|format(d.galones) }} gal
+                    {% if t.capacidad_gal %} / {{ t.capacidad_gal }} gal ({{ '%.1f'|format(d.pct) }}%){% endif %}
+                </span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover align-middle mb-0">
+                        <thead class="table-light small text-muted">
+                            <tr>
+                                <th style="width:8%">Pos.</th>
+                                <th>Lote</th>
+                                <th>Brix</th>
+                                <th class="text-end">Galones</th>
+                                <th>Registrado</th>
+                                <th style="width:15%" class="text-end">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for it in d.filas %}
+                            <tr>
+                                <td class="text-muted">{{ it.posicion }}</td>
+                                <td>{{ it.lote.codigo_lote if it.lote else it.id_lote }}</td>
+                                <td>{{ it.lote.brix if it.lote and it.lote.brix is not none else '-' }}</td>
+                                <td class="text-end">{{ '%.2f'|format(it.galones) if it.galones is not none else '-' }}</td>
+                                <td class="small text-muted">
+                                    {{ it.fecha_registro.strftime('%d/%m/%Y %H:%M') if it.fecha_registro else '-' }}
+                                </td>
+                                <td class="text-end">
+                                    <form method="POST" class="d-inline"
+                                          onsubmit="return confirm('¿Vaciar este lote del tanque {{ t.nombre_tanque }}?');">
+                                        <input type="hidden" name="accion" value="vaciar">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <input type="hidden" name="id_inventario_tqpf" value="{{ it.id_inventario_tqpf }}">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">
+                                            <i class="bi bi-x-circle me-1"></i>Vaciar
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="6" class="text-center text-muted py-3">
+                                    Este tanque no tiene inventario registrado.
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="alert alert-info">
+            Aún no hay tanques TQPF registrados.
+            {% if current_user.rol == 'administrador' %}
+            <a href="{{ url_for('configurar_tqpf') }}" class="alert-link">Configura el primero aquí</a>.
+            {% endif %}
+        </div>
+        {% endfor %}
+
+    </div>
+</div>
+{% endblock %}

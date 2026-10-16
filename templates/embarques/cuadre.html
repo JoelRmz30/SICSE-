@@ -1,44 +1,207 @@
-{# ==========================================================================
-   Placeholder: Cuadre de galonaje (Fase 5).
-   La conversión kg → galones depende de la densidad por brix y no está
-   confirmada por Calidad. Esta pantalla se implementará en una fase posterior.
-   ========================================================================== #}
 {% extends "base.html" %}
 {% block title %}Cuadre de galonaje{% endblock %}
 
 {% block content %}
-<div class="row justify-content-center">
-    <div class="col-xl-10 col-lg-11">
-
+<div class="row">
+    <div class="col-12">
         <div class="card shadow mb-4">
             <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
                 <h5 class="mb-0">
                     <i class="bi bi-droplet me-2"></i>Cuadre de galonaje
                 </h5>
-                <a href="{{ url_for('listar_embarques') }}" class="btn btn-sm btn-outline-light">
-                    <i class="bi bi-arrow-left me-1"></i>Volver al listado
-                </a>
-            </div>
-        </div>
-
-        <div class="card shadow">
-            <div class="card-body p-5 text-center">
-                <i class="bi bi-tools text-primary" style="font-size: 4rem;"></i>
-                <h4 class="mt-3">Cuadre de galonaje: próximamente</h4>
-                <p class="text-muted mt-2" style="max-width: 640px; margin: 0 auto;">
-                    Esta pantalla permitirá conciliar los galones embarcados contra la producción y los lotes cargados.
-                    La fórmula de conversión (kg → galones) depende de la densidad por brix para cada producto y aún
-                    debe ser confirmada por Calidad. Mientras tanto, puedes consultar los detalles de cada embarque
-                    desde el listado.
-                </p>
-                <div class="mt-4">
-                    <a href="{{ url_for('listar_embarques') }}" class="btn btn-primary">
-                        <i class="bi bi-list me-1"></i>Ir al listado de embarques
+                <div class="d-flex gap-2">
+                    <a href="{{ url_for('listar_embarques') }}" class="btn btn-sm btn-outline-light">
+                        <i class="bi bi-arrow-left me-1"></i>Volver al listado
+                    </a>
+                    <a href="{{ url_for('exportar_cuadre', **filtros) }}" class="btn btn-sm btn-outline-light">
+                        <i class="bi bi-file-earmark-excel me-1"></i>Exportar Excel
                     </a>
                 </div>
             </div>
         </div>
 
+        <!-- Nota: control interno -->
+        <div class="alert alert-info small">
+            <i class="bi bi-info-circle"></i>
+            El registro oficial de embarques es <strong>Dynamics</strong>. Este cuadre es un
+            <strong>control interno</strong> de SICSE para conciliar peso, papel e inventario.
+        </div>
+
+        <!-- Filtros -->
+        <div class="card shadow mb-4">
+            <div class="card-body">
+                <form method="get" class="row g-2 align-items-end">
+                    <div class="col-md-2">
+                        <label class="form-label small">Fecha desde</label>
+                        <input type="date" name="fecha_desde" class="form-control form-control-sm"
+                               value="{{ filtros.fecha_desde.strftime('%Y-%m-%d') if filtros.fecha_desde else '' }}">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label small">Fecha hasta</label>
+                        <input type="date" name="fecha_hasta" class="form-control form-control-sm"
+                               value="{{ filtros.fecha_hasta.strftime('%Y-%m-%d') if filtros.fecha_hasta else '' }}">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small">Producto</label>
+                        <select name="id_producto" class="form-select form-select-sm">
+                            <option value="">Todos</option>
+                            {% for p in productos %}
+                            <option value="{{ p.id_producto }}" {% if filtros.id_producto == p.id_producto %}selected{% endif %}>
+                                {{ p.descripcion }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small">Cliente</label>
+                        <select name="id_cliente" class="form-select form-select-sm">
+                            <option value="">Todos</option>
+                            {% for c in clientes %}
+                            <option value="{{ c.id_cliente }}" {% if filtros.id_cliente == c.id_cliente %}selected{% endif %}>
+                                {{ c.nombre_cliente }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label small">Estado</label>
+                        <select name="estado" class="form-select form-select-sm">
+                            <option value="">Todos</option>
+                            <option value="cuadra" {% if filtros.estado == 'cuadra' %}selected{% endif %}>Cuadra</option>
+                            <option value="dentro_tolerancia" {% if filtros.estado == 'dentro_tolerancia' %}selected{% endif %}>Dentro de tolerancia</option>
+                            <option value="descuadre" {% if filtros.estado == 'descuadre' %}selected{% endif %}>Descuadre</option>
+                            <option value="sin_datos" {% if filtros.estado == 'sin_datos' %}selected{% endif %}>Sin datos</option>
+                        </select>
+                    </div>
+                    <div class="col-md-12 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm">
+                            <i class="bi bi-funnel me-1"></i>Filtrar
+                        </button>
+                        <a href="{{ url_for('cuadre_embarques') }}" class="btn btn-outline-secondary btn-sm">
+                            <i class="bi bi-x-circle me-1"></i>Limpiar
+                        </a>
+                        <span class="small text-muted align-self-center">
+                            Tolerancia: {{ '%.1f'|format(tolerancia_pct) }}%
+                        </span>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Tarjetas resumen -->
+        <div class="row g-3 mb-4">
+            <div class="col-md-3">
+                <div class="card shadow text-center">
+                    <div class="card-body">
+                        <div class="fs-3 fw-bold text-primary">{{ resumen.total }}</div>
+                        <div class="small text-muted">Embarques</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card shadow text-center border-success">
+                    <div class="card-body">
+                        <div class="fs-3 fw-bold text-success">{{ resumen.cuadra }}</div>
+                        <div class="small text-muted">Cuadran</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card shadow text-center border-warning">
+                    <div class="card-body">
+                        <div class="fs-3 fw-bold text-warning">{{ resumen.dentro_tolerancia }}</div>
+                        <div class="small text-muted">Dentro de tolerancia</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card shadow text-center border-danger">
+                    <div class="card-body">
+                        <div class="fs-3 fw-bold text-danger">{{ resumen.descuadre }}</div>
+                        <div class="small text-muted">Descuadre</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tabla de resultados -->
+        <div class="card shadow">
+            <div class="card-body p-0">
+                {% if resultados %}
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover mb-0 align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Cita</th>
+                                <th>Producto</th>
+                                <th>Cliente</th>
+                                <th class="text-end">Brix</th>
+                                <th class="text-end">Peso neto (kg)</th>
+                                <th class="text-end">Gal. peso</th>
+                                <th class="text-end">Gal. lote</th>
+                                <th class="text-end">Gal. inv.</th>
+                                <th class="text-end">Dif. peso-lote %</th>
+                                <th class="text-end">Dif. inv-lote %</th>
+                                <th class="text-center">Estado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for r in resultados %}
+                            {% set emb = r.embarque %}
+                            <tr class="{% if r.estado == 'descuadre' %}table-danger{% elif r.estado == 'dentro_tolerancia' %}table-warning{% elif r.estado == 'cuadra' %}table-success{% endif %}">
+                                <td>{{ emb.fecha_embarque.strftime('%d/%m/%Y') if emb.fecha_embarque else '' }}</td>
+                                <td>
+                                    <a href="{{ url_for('detalle_embarque', id_embarque=emb.id_embarque) }}" class="text-decoration-none">
+                                        {{ emb.num_cita }}
+                                    </a>
+                                </td>
+                                <td class="small">{{ emb.producto.descripcion if emb.producto else '' }}</td>
+                                <td class="small">{{ emb.cliente.nombre_cliente if emb.cliente else '' }}</td>
+                                <td class="text-end small">{{ '%.1f'|format(r.brix_promedio) if r.brix_promedio is not none else '-' }}</td>
+                                <td class="text-end small">{{ '%.0f'|format(r.peso_neto) if r.peso_neto is not none else '-' }}</td>
+                                <td class="text-end small">{{ '%.0f'|format(r.galones_peso) if r.galones_peso is not none else '-' }}</td>
+                                <td class="text-end small">{{ '%.0f'|format(r.galones_lotes) }}</td>
+                                <td class="text-end small">{{ '%.0f'|format(r.galones_inventario) if r.galones_inventario is not none else '-' }}</td>
+                                <td class="text-end small {% if r.dif_peso_lotes is not none and r.dif_peso_lotes|abs > tolerancia_pct %}text-danger fw-semibold{% endif %}">
+                                    {{ '%.2f'|format(r.dif_peso_lotes) if r.dif_peso_lotes is not none else '-' }}
+                                </td>
+                                <td class="text-end small {% if r.dif_inv_lotes is not none and r.dif_inv_lotes|abs > tolerancia_pct %}text-danger fw-semibold{% endif %}">
+                                    {{ '%.2f'|format(r.dif_inv_lotes) if r.dif_inv_lotes is not none else '-' }}
+                                </td>
+                                <td class="text-center">
+                                    {% if r.estado == 'cuadra' %}
+                                    <span class="badge bg-success">Cuadra</span>
+                                    {% elif r.estado == 'dentro_tolerancia' %}
+                                    <span class="badge bg-warning text-dark">Tolerancia</span>
+                                    {% elif r.estado == 'descuadre' %}
+                                    <span class="badge bg-danger">Descuadre</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">Sin datos</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="text-center text-muted py-5">
+                    <i class="bi bi-inbox fs-1"></i>
+                    <p class="mt-2">No hay embarques que coincidan con los filtros.</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Leyenda -->
+        <div class="mt-3 small text-muted">
+            <strong>Columnas:</strong>
+            <em>Gal. peso</em> = peso neto ÷ (densidad × 3.78541).
+            <em>Gal. lote</em> = suma de embarque_lotes.cantidad.
+            <em>Gal. inv.</em> = suma de movimientos vinculados (id_movimiento).
+            <strong>Estado:</strong> Cuadra (≤0.1%), Dentro de tolerancia (≤{{ '%.1f'|format(tolerancia_pct) }}%), Descuadre.
+        </div>
     </div>
 </div>
 {% endblock %}

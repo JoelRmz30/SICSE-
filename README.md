@@ -63,14 +63,11 @@ python app.py
 
 Accede a la aplicación en: [http://localhost:5000](http://localhost:5000)
 
-## Usuarios por Defecto
+## Usuarios
 
-- **Administrador:**
-  - Usuario: `admin`
-  - Contraseña: `admin123`
-- **Capturista:**
-  - Usuario: `capturista`
-  - Contraseña: `cap123`
+Al ejecutar `init_db.py` por primera vez se crean los usuarios `admin`, `capturista` e `invitado` con contraseñas aleatorias que se muestran en consola. Cada usuario deberá cambiar su contraseña en el primer inicio de sesión.
+
+> **Importante:** No existen contraseñas por defecto. La contraseña temporal se genera al crear el usuario y debe cambiarse inmediatamente.
 
 ## Funcionalidades Principales
 

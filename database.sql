@@ -9,7 +9,9 @@ CREATE TABLE IF NOT EXISTS usuarios (
     usuario VARCHAR(50) UNIQUE, 
     password VARCHAR(255), 
     rol ENUM('administrador','capturista','invitado'), 
-    activo BOOLEAN DEFAULT TRUE 
+    activo BOOLEAN DEFAULT TRUE,
+    debe_cambiar_password BOOLEAN NOT NULL DEFAULT FALSE,
+    area ENUM('operacion','calidad','embarques','almacen','ti') NULL DEFAULT NULL
 ); 
 
 -- Tabla: silos
@@ -264,6 +266,28 @@ CREATE TABLE IF NOT EXISTS embarque_lotes (
     CONSTRAINT chk_embarque_lotes_cantidad CHECK (cantidad > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- embarque_pesos (1:1) - pesos para el cuadre de galonaje
+CREATE TABLE IF NOT EXISTS embarque_pesos (
+    id_embarque INT PRIMARY KEY,
+    peso_bruto_kg DECIMAL(12,2) NULL,
+    tara_kg DECIMAL(12,2) NULL,
+    peso_neto_kg DECIMAL(12,2) NULL,
+    actualizado_por INT NULL,
+    actualizado_en DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (id_embarque) REFERENCES embarques(id_embarque) ON DELETE CASCADE,
+    FOREIGN KEY (actualizado_por) REFERENCES usuarios(id_usuario) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- densidad_brix - tabla de densidad por producto y Brix (interpolación lineal)
+CREATE TABLE IF NOT EXISTS densidad_brix (
+    id_densidad INT AUTO_INCREMENT PRIMARY KEY,
+    id_producto INT NOT NULL,
+    brix DECIMAL(6,2) NOT NULL,
+    densidad_kg_l DECIMAL(8,5) NOT NULL,
+    FOREIGN KEY (id_producto) REFERENCES productos_embarque(id_producto) ON DELETE CASCADE,
+    UNIQUE KEY uk_prod_brix (id_producto, brix)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- ============================================================
 -- MÓDULO EMBARQUES: PARÁMETROS CONFIGURABLES
 -- ============================================================
@@ -273,6 +297,55 @@ CREATE TABLE IF NOT EXISTS parametros_sistema (
     descripcion VARCHAR(255) NOT NULL,
     creado_en DATETIME DEFAULT CURRENT_TIMESTAMP,
     actualizado_en DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Parámetros por defecto para el sistema de alertas y cuadre
+INSERT INTO parametros_sistema (clave, valor, descripcion) VALUES
+    ('silo_ocupacion_alerta_pct', '90', 'Porcentaje de ocupación de silo que dispara alerta'),
+    ('embarque_en_planta_max_horas', '24', 'Horas máximas permitidas para un embarque en planta'),
+    ('brix_min_concentrado', '60.0', 'Brix mínimo para concentrado'),
+    ('brix_max_concentrado', '72.0', 'Brix máximo para concentrado'),
+    ('cuadre_tolerancia_pct', '1.0', 'Tolerancia porcentual para el cuadre de galonaje')
+ON DUPLICATE KEY UPDATE clave=clave;
+
+-- ============================================================
+-- MÓDULO ALERTAS Y NOTIFICACIONES
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS alertas (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    tipo VARCHAR(80) NOT NULL,
+    severidad ENUM('info','warning','danger') NOT NULL,
+    clave_unica VARCHAR(200) NOT NULL UNIQUE,
+    mensaje TEXT NOT NULL,
+    url VARCHAR(500) NULL,
+    estado ENUM('activa','atendida','cerrada') NOT NULL DEFAULT 'activa',
+    creada_en DATETIME DEFAULT CURRENT_TIMESTAMP,
+    actualizada_en DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    atendida_por INT NULL,
+    atendida_en DATETIME NULL,
+    FOREIGN KEY (atendida_por) REFERENCES usuarios(id_usuario) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS notificaciones (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    id_usuario INT NOT NULL,
+    id_alerta INT NOT NULL,
+    titulo VARCHAR(200) NOT NULL,
+    mensaje TEXT NOT NULL,
+    url VARCHAR(500) NULL,
+    leida TINYINT(1) NOT NULL DEFAULT 0,
+    creada_en DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_notif_usuario (id_usuario),
+    FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario) ON DELETE CASCADE,
+    FOREIGN KEY (id_alerta) REFERENCES alertas(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS alerta_destinatarios (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    tipo_alerta VARCHAR(80) NOT NULL,
+    area ENUM('operacion','calidad','embarques','almacen','ti') NOT NULL,
+    INDEX idx_dest_tipo (tipo_alerta)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ============================================================

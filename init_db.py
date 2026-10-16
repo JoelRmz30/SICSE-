@@ -1,9 +1,16 @@
-from app import app, db, Usuario, EstadoProducto, Cliente, Silo
+from app import app, db, Usuario, EstadoProducto, Cliente, Silo, TanqueTQPF
 import werkzeug.security # pyright: ignore[reportMissingImports]
 import os
+import secrets
+import string
 import dotenv # pyright: ignore[reportMissingImports]
 
 dotenv.load_dotenv()
+
+def _generar_password(longitud=16):
+    """Genera una contraseña aleatoria segura."""
+    alfabeto = string.ascii_letters + string.digits + "!@#$%^&*()-_=+"
+    return ''.join(secrets.choice(alfabeto) for _ in range(longitud))
 
 def init_db():
     print("Iniciando inicialización de base de datos...")
@@ -77,55 +84,65 @@ def init_db():
                 )
                 db.session.add(silo)
 
+        # Catálogo de tanques de proceso (TQPF): 3 tanques de pared fría.
+        print("Verificando catálogo de tanques TQPF...")
+        tanques_tqpf = ['TQPF-1', 'TQPF-2', 'TQPF-3']
+        for nombre in tanques_tqpf:
+            if not TanqueTQPF.query.filter_by(nombre_tanque=nombre).first():
+                db.session.add(TanqueTQPF(nombre_tanque=nombre))
+
         # Verificar si ya existe el administrador
         admin_user = Usuario.query.filter_by(usuario='admin').first()
-        hashed_admin_pw = werkzeug.security.generate_password_hash('admin123')
         if not admin_user:
+            admin_pw = _generar_password()
             print("Creando usuario administrador...")
             admin = Usuario(
                 nombre='Administrador Sistema',
                 usuario='admin',
-                password=hashed_admin_pw,
+                password=werkzeug.security.generate_password_hash(admin_pw),
                 rol='administrador',
-                activo=True
+                activo=True,
+                debe_cambiar_password=True,
             )
             db.session.add(admin)
+            print("=" * 60)
+            print(f"  Usuario administrador creado: admin")
+            print(f"  Contraseña temporal: {admin_pw}")
+            print("  (Deberá cambiarla en el primer inicio de sesión)")
+            print("=" * 60)
         else:
-            print("Actualizando contraseña de administrador por defecto...")
-            admin_user.password = hashed_admin_pw
+            print("El usuario administrador ya existe.")
 
-        # Crear un capturista de prueba
+        # Crear un capturista de prueba (solo si no existe)
         capturista_user = Usuario.query.filter_by(usuario='capturista').first()
-        hashed_cap_pw = werkzeug.security.generate_password_hash('cap123')
         if not capturista_user:
+            cap_pw = _generar_password()
             print("Creando usuario capturista...")
             capturista = Usuario(
                 nombre='Capturista',
                 usuario='capturista',
-                password=hashed_cap_pw,
+                password=werkzeug.security.generate_password_hash(cap_pw),
                 rol='capturista',
-                activo=True
+                activo=True,
+                debe_cambiar_password=True,
             )
             db.session.add(capturista)
-        else:
-            print("Actualizando contraseña de capturista por defecto...")
-            capturista_user.password = hashed_cap_pw
+            print(f"  Usuario capturista creado: capturista  Contraseña temporal: {cap_pw}")
 
         invitado_user = Usuario.query.filter_by(usuario='invitado').first()
-        hashed_invitado_pw = werkzeug.security.generate_password_hash('invitado123')
         if not invitado_user:
+            inv_pw = _generar_password()
             print("Creando usuario invitado...")
             invitado = Usuario(
                 nombre='Invitado',
                 usuario='invitado',
-                password=hashed_invitado_pw,
+                password=werkzeug.security.generate_password_hash(inv_pw),
                 rol='invitado',
-                activo=True
+                activo=True,
+                debe_cambiar_password=True,
             )
             db.session.add(invitado)
-        else:
-            print("Actualizando contraseña de invitado por defecto...")
-            invitado_user.password = hashed_invitado_pw
+            print(f"  Usuario invitado creado: invitado  Contraseña temporal: {inv_pw}")
 
         db.session.commit()
         print("Base de datos inicializada correctamente.")

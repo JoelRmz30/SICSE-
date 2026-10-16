@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}Reportes{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-xl-11 col-lg-12">
+
+        <div class="card shadow mb-4">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <h5 class="mb-0">
+                    <i class="bi bi-bar-chart me-2"></i>Reportes
+                </h5>
+                <a href="{{ url_for('index') }}" class="btn btn-sm btn-outline-light">
+                    <i class="bi bi-arrow-left me-1"></i>Volver al inicio
+                </a>
+            </div>
+        </div>
+
+        {# ===================== REPORTE DE INVENTARIO ===================== #}
+        <div class="card shadow mb-4">
+            <div class="card-header bg-light fw-semibold d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span>
+                    <i class="bi bi-box-seam me-1"></i>Inventario por silo
+                </span>
+                <a href="{{ url_for('exportar_reportes', tipo='inventario') }}" class="btn btn-sm btn-success">
+                    <i class="bi bi-file-earmark-excel me-1"></i>Exportar a Excel
+                </a>
+            </div>
+            <div class="card-body">
+                <div class="row g-3 mb-3">
+                    <div class="col-md-4">
+                        <div class="border rounded p-3 bg-light">
+                            <div class="small text-muted">Total capacidad (gal)</div>
+                            <div class="fs-4 fw-bold">{{ '%.2f'|format(total_cap) }}</div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="border rounded p-3 bg-light">
+                            <div class="small text-muted">Total inventario (gal)</div>
+                            <div class="fs-4 fw-bold">{{ '%.2f'|format(total_gal) }}</div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="border rounded p-3 bg-light">
+                            <div class="small text-muted">Ocupación promedio</div>
+                            <div class="fs-4 fw-bold">
+                                {% if total_cap > 0 %}
+                                    {{ '%.1f'|format((total_gal / total_cap * 100)) }}%
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light small text-muted">
+                            <tr>
+                                <th>Silo</th>
+                                <th>Tipo producto</th>
+                                <th>Capacidad (gal)</th>
+                                <th>Galones</th>
+                                <th style="width:30%">Ocupación</th>
+                                <th>Estado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for s in inventario %}
+                            <tr>
+                                <td>{{ s.nombre }}</td>
+                                <td>{{ s.tipo_producto or '-' }}</td>
+                                <td>{{ '%.2f'|format(s.capacidad_gal) }}</td>
+                                <td>{{ '%.2f'|format(s.galones) }}</td>
+                                <td>
+                                    {% if s.capacidad_gal > 0 %}
+                                    <div class="d-flex align-items-center gap-2">
+                                        <div class="progress flex-grow-1" style="height:18px;">
+                                            <div class="progress-bar {{ 'bg-danger' if s.ocupacion_pct > 90 else 'bg-success' }}"
+                                                 role="progressbar"
+                                                 style="width: {{ s.ocupacion_pct if s.ocupacion_pct <= 100 else 100 }}%">
+                                            </div>
+                                        </div>
+                                        <span class="small fw-semibold">{{ '%.1f'|format(s.ocupacion_pct) }}%</span>
+                                    </div>
+                                    {% else %}
+                                        <span class="text-muted">-</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span class="badge {{ 'bg-success' if s.estado == 'activo' else 'bg-secondary' }}">
+                                        {{ s.estado }}
+                                    </span>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="6" class="text-center text-muted py-4">No hay silos registrados.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        {# ===================== REPORTE DE EMBARQUES ===================== #}
+        <div class="card shadow mb-4">
+            <div class="card-header bg-light fw-semibold d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span>
+                    <i class="bi bi-truck me-1"></i>Embarques por periodo
+                </span>
+                <a href="{{ url_for('exportar_reportes', tipo='embarques',
+                        fecha_desde=filtros.fecha_desde, fecha_hasta=filtros.fecha_hasta,
+                        id_producto=filtros.id_producto, id_cliente=filtros.id_cliente) }}"
+                   class="btn btn-sm btn-success">
+                    <i class="bi bi-file-earmark-excel me-1"></i>Exportar a Excel
+                </a>
+            </div>
+            <div class="card-body">
+                <form method="GET" class="row g-3 mb-3">
+                    <div class="col-md-3">
+                        <label class="form-label small">Fecha desde</label>
+                        <input type="date" class="form-control" name="fecha_desde" value="{{ filtros.fecha_desde }}">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small">Fecha hasta</label>
+                        <input type="date" class="form-control" name="fecha_hasta" value="{{ filtros.fecha_hasta }}">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small">Producto</label>
+                        <select class="form-select" name="id_producto">
+                            <option value="">Todos</option>
+                            {% for p in productos %}
+                            <option value="{{ p.id_producto }}" {{ 'selected' if filtros.id_producto == p.id_producto else '' }}>
+                                {{ p.descripcion }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small">Cliente</label>
+                        <select class="form-select" name="id_cliente">
+                            <option value="">Todos</option>
+                            {% for c in clientes %}
+                            <option value="{{ c.id_cliente }}" {{ 'selected' if filtros.id_cliente == c.id_cliente else '' }}>
+                                {{ c.nombre_cliente }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-12 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary btn-sm">
+                            <i class="bi bi-funnel me-1"></i>Filtrar
+                        </button>
+                        <a href="{{ url_for('reportes') }}" class="btn btn-outline-secondary btn-sm">Limpiar</a>
+                    </div>
+                </form>
+
+                <div class="alert alert-info py-2 small mb-3">
+                    <strong>{{ embarques|length }}</strong> embarques &middot;
+                    Total galones: <strong>{{ '%.2f'|format(total_embarques_gal) }}</strong>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light small text-muted">
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Cita</th>
+                                <th>Producto</th>
+                                <th>Cliente</th>
+                                <th>Estatus</th>
+                                <th>Turno</th>
+                                <th class="text-end">Galones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for e in embarques %}
+                            <tr>
+                                <td>{{ e.fecha_embarque.strftime('%Y-%m-%d') if e.fecha_embarque else '' }}</td>
+                                <td>{{ e.num_cita }}</td>
+                                <td>{{ e.producto.descripcion if e.producto else (e.producto_texto or '-') }}</td>
+                                <td>{{ e.cliente.nombre_cliente if e.cliente else (e.cliente_texto or '-') }}</td>
+                                <td>
+                                    <span class="badge bg-secondary">{{ e.estatus }}</span>
+                                </td>
+                                <td>{{ e.turno }}</td>
+                                <td class="text-end">
+                                    {{ '%.2f'|format(e.lotes | sum(attribute='cantidad') if e.lotes else 0) }}
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="7" class="text-center text-muted py-4">
+                                    No hay embarques que coincidan con los filtros.
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}Notificaciones{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h3><i class="bi bi-bell"></i> Notificaciones</h3>
+    <form action="{{ url_for('notificacion_leer_todas') }}" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-check2-all"></i> Marcar todas como leídas
+        </button>
+    </form>
+</div>
+
+<div class="alert alert-light border shadow-sm">
+    <div class="d-flex align-items-start gap-3">
+        <i class="bi bi-info-circle text-primary fs-4"></i>
+        <div>
+            <div class="fw-semibold">Centro de alertas</div>
+            <div class="text-muted small">
+                Las alertas del sistema se concentran aqui y en la campana de notificaciones para mantener el dashboard principal mas limpio.
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if notificaciones %}
+<div class="list-group">
+    {% for n in notificaciones %}
+    <form action="{{ url_for('notificacion_leer', id_notif=n.id) }}" method="post" class="m-0">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="list-group-item list-group-item-action text-start
+               {{ 'bg-light' if not n.leida else '' }}"
+                style="border-left: 4px solid {{ '#dc3545' if not n.leida else '#dee2e6' }};">
+            <div class="d-flex w-100 justify-content-between">
+                <h6 class="mb-1 {{ 'fw-semibold' if not n.leida else '' }}">
+                    {{ n.titulo }}
+                    {% if not n.leida %}<span class="badge bg-danger ms-1">Nueva</span>{% endif %}
+                </h6>
+                <small class="text-muted">
+                    {{ n.creada_en.strftime('%d/%m/%Y %H:%M') if n.creada_en else '' }}
+                </small>
+            </div>
+            <p class="mb-1 small">{{ n.mensaje }}</p>
+            {% if n.url and n.url != '#' %}
+            <small><a href="{{ n.url }}" class="text-decoration-none">Ir al detalle <i class="bi bi-arrow-right"></i></a></small>
+            {% endif %}
+        </button>
+    </form>
+    {% endfor %}
+</div>
+{% else %}
+<div class="text-center text-muted py-5">
+    <i class="bi bi-bell-slash fs-1"></i>
+    <p class="mt-2">No tienes notificaciones.</p>
+</div>
+{% endif %}
+{% endblock %}

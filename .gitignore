@@ -9,9 +9,15 @@ __pycache__/
 venv/
 
 .vscode/
+.trae/
+
+# Archivos temporales de pruebas y scripts ad-hoc
+__smoke*.py
+__migra*.py
+_*.py
+test_*output*.txt
+*.log
 
 Nueva carpeta/
 _tmp_*
-
-.trae/
 

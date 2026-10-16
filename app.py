@@ -23,6 +23,14 @@ load_dotenv()
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY') or secrets.token_urlsafe(48)
 
+# Seguridad de cookies de sesión
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+# SESSION_COOKIE_SECURE debe activarse solo cuando se publique por HTTPS.
+app.config['SESSION_COOKIE_SECURE'] = os.getenv('SESSION_COOKIE_SECURE', '0').strip() in ('1', 'true', 'True')
+app.config['REMEMBER_COOKIE_SAMESITE'] = 'Lax'
+app.config['REMEMBER_COOKIE_HTTPONLY'] = True
+
 # Configuración de la base de datos MySQL (Compatible con XAMPP/Laragon)
 user = os.getenv('DB_USER', 'root')
 password = os.getenv('DB_PASSWORD', '')
@@ -74,6 +82,9 @@ class Usuario(UserMixin, db.Model):
     password = db.Column(db.String(255), nullable=False)
     rol = db.Column(db.Enum('administrador', 'capturista', 'invitado'), nullable=False)
     activo = db.Column(db.Boolean, default=True)
+    debe_cambiar_password = db.Column(db.Boolean, default=False, nullable=False)
+    area = db.Column(db.Enum('operacion', 'calidad', 'embarques', 'almacen', 'ti'),
+                     nullable=True, default=None)
 
     def get_id(self):
         return str(self.id_usuario)
@@ -150,6 +161,44 @@ class Movimiento(db.Model):
     silo = db.relationship('Silo')
     lote = db.relationship('Lote')
     usuario = db.relationship('Usuario')
+
+
+# =====================================================================
+# ===== MÓDULO TQPF (TANQUES DE PROCESO) - MODELOS ====================
+# =====================================================================
+class TanqueTQPF(db.Model):
+    """
+    Tanque de proceso (TQPF).
+
+    Son los tanques donde el producto permanece mientras está en proceso,
+    antes de pasar a los silos. Su inventario es independiente del de silos.
+    """
+    __tablename__ = 'tanques_tqpf'
+    id_tanque = db.Column(db.Integer, primary_key=True)
+    nombre_tanque = db.Column(db.String(30), unique=True)
+    capacidad_gal = db.Column(db.Numeric(10, 2))
+    tipo_producto = db.Column(db.String(30), nullable=True)
+    estado = db.Column(db.Enum('activo', 'inactivo'), default='activo')
+
+
+class InventarioTQPF(db.Model):
+    """
+    Inventario de un tanque de proceso.
+
+    Cada fila representa el contenido de un lote dentro de un tanque TQPF.
+    La `posicion` se usa para el consumo LIFO (la posición 1 es el último
+    ingreso y por tanto el primero en salir).
+    """
+    __tablename__ = 'inventario_tqpf'
+    id_inventario_tqpf = db.Column(db.Integer, primary_key=True)
+    id_tanque = db.Column(db.Integer, db.ForeignKey('tanques_tqpf.id_tanque'))
+    id_lote = db.Column(db.Integer, db.ForeignKey('lotes.id_lote'))
+    posicion = db.Column(db.Integer)
+    galones = db.Column(db.Numeric(10, 2))
+    fecha_registro = db.Column(db.DateTime, default=datetime.utcnow)
+
+    tanque = db.relationship('TanqueTQPF')
+    lote = db.relationship('Lote')
 
 
 # =====================================================================
@@ -314,6 +363,8 @@ class Embarque(db.Model):
                               cascade='all, delete-orphan')
     detalle = db.relationship('EmbarqueDetalle', backref='embarque', uselist=False,
                               cascade='all, delete-orphan')
+    pesos = db.relationship('EmbarquePeso', backref='embarque', uselist=False,
+                            cascade='all, delete-orphan')
     sellos = db.relationship('EmbarqueSello', backref='embarque',
                              cascade='all, delete-orphan', lazy=True)
     lotes = db.relationship('EmbarqueLote', backref='embarque',
@@ -339,8 +390,10 @@ class Embarque(db.Model):
 class EmbarqueTiempos(db.Model):
     """
     Registro 1 a 1 de tiempos operativos del embarque.
-    Orden obligatorio: llegada <= entrada <= pesado_inicial <= pesaje_salida
-                       <= documentacion <= salida.
+    Orden obligatorio: llegada <= entrada <= pesado_inicial <= pesaje_salida <= documentacion,
+    y salida >= pesaje_salida. La documentacion y la salida pueden registrarse en
+    cualquier orden entre si (en captura real la salida de planta puede ocurrir antes
+    de que se complete la documentacion).
     Si faltan tiempos el estatus debe quedar 'en_planta'; con los 6 completos
     puede pasar a 'cargado'.
     """
@@ -364,7 +417,7 @@ class EmbarqueTiempos(db.Model):
             ('entrada', self.entrada, 'pesado_inicial', self.pesado_inicial),
             ('pesado_inicial', self.pesado_inicial, 'pesaje_salida', self.pesaje_salida),
             ('pesaje_salida', self.pesaje_salida, 'documentacion', self.documentacion),
-            ('documentacion', self.documentacion, 'salida', self.salida),
+            ('pesaje_salida', self.pesaje_salida, 'salida', self.salida),
         ]
         nombres = {
             'llegada': 'Fecha y hora Registro llegada planta',
@@ -417,6 +470,29 @@ class EmbarqueDetalle(db.Model):
     lavadero = db.relationship('Lavadero')
 
 
+class EmbarquePeso(db.Model):
+    """
+    Registro 1 a 1 de pesos del embarque (para el cuadre de galonaje).
+    - peso_bruto_kg: peso total de la unidad cargada.
+    - tara_kg: peso de la unidad vacía.
+    - peso_neto_kg: se calcula como bruto - tara (se guarda para validar).
+    La captura es manual desde el formulario de embarque.
+    """
+    __tablename__ = 'embarque_pesos'
+    id_embarque = db.Column(db.Integer, db.ForeignKey('embarques.id_embarque'),
+                            primary_key=True)
+    peso_bruto_kg = db.Column(db.Numeric(12, 2), nullable=True)
+    tara_kg = db.Column(db.Numeric(12, 2), nullable=True)
+    peso_neto_kg = db.Column(db.Numeric(12, 2), nullable=True)
+    actualizado_por = db.Column(db.Integer, db.ForeignKey('usuarios.id_usuario'), nullable=True)
+    actualizado_en = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def recalcular_neto(self):
+        """Calcula peso_neto = bruto - tara si ambos están presentes."""
+        if self.peso_bruto_kg is not None and self.tara_kg is not None:
+            self.peso_neto_kg = Decimal(str(self.peso_bruto_kg)) - Decimal(str(self.tara_kg))
+
+
 class EmbarqueSello(db.Model):
     """
     Sellos colocados a la unidad (1 a N).
@@ -464,6 +540,82 @@ class ParametroSistema(db.Model):
     descripcion = db.Column(db.String(255), nullable=False)
     creado_en = db.Column(db.DateTime, default=datetime.utcnow)
     actualizado_en = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DensidadBrix(db.Model):
+    """
+    Tabla de densidad por Brix y producto (la entrega Calidad).
+    - Si Calidad da una tabla de puntos, se interpola linealmente.
+    - Forma: densidad_brix(producto, brix, densidad_kg_l).
+    """
+    __tablename__ = 'densidad_brix'
+    id_densidad = db.Column(db.Integer, primary_key=True)
+    id_producto = db.Column(db.Integer, db.ForeignKey('productos_embarque.id_producto'), nullable=False)
+    brix = db.Column(db.Numeric(6, 2), nullable=False)
+    densidad_kg_l = db.Column(db.Numeric(8, 5), nullable=False)
+
+    producto = db.relationship('ProductoEmbarque')
+
+
+# =====================================================================
+# ===== SISTEMA DE ALERTAS Y NOTIFICACIONES ==========================
+# =====================================================================
+
+class Alerta(db.Model):
+    """
+    Alertas persistentes del sistema (Fase B).
+    - clave_unica evita duplicados (ej: silo:7:ocupacion_alta).
+    - estado: 'activa' | 'atendida' | 'cerrada'.
+    - Las alertas se generan desde calcular_alertas() y se persisten aquí
+      para poder registrar quién las atendió y cuándo.
+    """
+    __tablename__ = 'alertas'
+    id = db.Column(db.Integer, primary_key=True)
+    tipo = db.Column(db.String(80), nullable=False)
+    severidad = db.Column(db.Enum('info', 'warning', 'danger'), nullable=False)
+    clave_unica = db.Column(db.String(200), unique=True, nullable=False)
+    mensaje = db.Column(db.Text, nullable=False)
+    url = db.Column(db.String(500), nullable=True)
+    estado = db.Column(db.Enum('activa', 'atendida', 'cerrada'), nullable=False, default='activa')
+    creada_en = db.Column(db.DateTime, default=datetime.utcnow)
+    actualizada_en = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    atendida_por = db.Column(db.Integer, db.ForeignKey('usuarios.id_usuario'), nullable=True)
+    atendida_en = db.Column(db.DateTime, nullable=True)
+
+    notificaciones = db.relationship('Notificacion', backref='alerta',
+                                     cascade='all, delete-orphan', lazy=True)
+
+
+class Notificacion(db.Model):
+    """
+    Notificación dirigida a un usuario concreto.
+    - Se crea cuando una alerta se genera y coincide con el área del usuario
+      (según alerta_destinatarios).
+    - leida indica si el usuario ya la vio.
+    """
+    __tablename__ = 'notificaciones'
+    id = db.Column(db.Integer, primary_key=True)
+    id_usuario = db.Column(db.Integer, db.ForeignKey('usuarios.id_usuario'), nullable=False, index=True)
+    id_alerta = db.Column(db.Integer, db.ForeignKey('alertas.id'), nullable=False)
+    titulo = db.Column(db.String(200), nullable=False)
+    mensaje = db.Column(db.Text, nullable=False)
+    url = db.Column(db.String(500), nullable=True)
+    leida = db.Column(db.Boolean, default=False, nullable=False)
+    creada_en = db.Column(db.DateTime, default=datetime.utcnow)
+
+    usuario = db.relationship('Usuario', foreign_keys=[id_usuario])
+
+
+class AlertaDestinatario(db.Model):
+    """
+    Define qué áreas reciben notificaciones por cada tipo de alerta.
+    Ej: tipo_alerta='silo_ocupacion_alta', area='operacion'.
+    Si no hay registros para un tipo, se notifica a todos los usuarios activos.
+    """
+    __tablename__ = 'alerta_destinatarios'
+    id = db.Column(db.Integer, primary_key=True)
+    tipo_alerta = db.Column(db.String(80), nullable=False, index=True)
+    area = db.Column(db.Enum('operacion', 'calidad', 'embarques', 'almacen', 'ti'), nullable=False)
 
 
 # =====================================================================
@@ -826,13 +978,20 @@ def inject_helpers():
     - _is_guest: oculta botones de escritura al rol invitado.
     - empaque_format_num: formatea cantidades por UM (Pz/Kg) en templates.
     - empaque_estado_desde_valores: determina badge de estado con valores batch.
+    - notificaciones_no_leidas: contador para la campana del navbar.
     """
+    no_leidas = 0
+    if current_user.is_authenticated:
+        no_leidas = Notificacion.query.filter_by(
+            id_usuario=current_user.id_usuario, leida=False
+        ).count()
     return {
         '_is_guest': _is_guest,
         'empaque_format_num': _empaque_format_numero,
         'empaque_estado_desde_valores': _empaque_estado_desde_valores,
         'date': date,
         'today': date.today,
+        'notificaciones_no_leidas': no_leidas,
     }
 
 RUTAS_PERMITIDAS_INVITADO_GET = frozenset({
@@ -845,6 +1004,15 @@ RUTAS_PERMITIDAS_INVITADO_GET = frozenset({
     # Módulo empaque: solo lectura (rol Consulta -> invitado)
     'empaque_resumen', 'empaque_inventario',
     'empaque_api_articulo_detalle',
+    # Notificaciones (propias del usuario)
+    'notificaciones', 'api_notificaciones',
+    # Exportar cuadre de galonaje
+    'exportar_cuadre',
+})
+
+# POST permitidos para invitados (solo afectan sus propias notificaciones)
+RUTAS_POST_PERMITIDAS_INVITADO = frozenset({
+    'notificacion_leer', 'notificacion_leer_todas',
 })
 
 RUTAS_NO_PERMITIDAS_INVITADO = frozenset({
@@ -1041,6 +1209,482 @@ def _empaque_estado_desde_valores(stock_actual, fisico_dynamics, stock_minimo):
     return ('con_diferencia', 'Con diferencia', 'warning')
 
 
+# =====================================================================
+# ===== SISTEMA DE ALERTAS (Fase A) ====================================
+# =====================================================================
+
+def _get_parametro_str(clave, default=None):
+    """Lee un parámetro de parametros_sistema como texto. Devuelve default si no existe."""
+    p = ParametroSistema.query.get(clave)
+    return p.valor if p and p.valor not in (None, '') else default
+
+
+def _get_parametro_float(clave, default=None):
+    """Lee un parámetro numérico. Devuelve default si no existe o no es válido."""
+    raw = _get_parametro_str(clave)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        return default
+
+
+def calcular_alertas():
+    """
+    Calcula las alertas activas del sistema a partir de los datos existentes.
+    Devuelve una lista de diccionarios: {tipo, severidad, mensaje, url}.
+
+    severidad: 'info' | 'warning' | 'danger' (reutiliza colores de empaque).
+    No requiere tabla nueva; todo se calcula al vuelo.
+    """
+    alertas = []
+    ahora = datetime.now()
+    hoy = ahora.date()
+
+    # ------------------------------------------------------------------
+    # 1. SILOS: ocupación mayor a X %
+    # ------------------------------------------------------------------
+    umbral_silo = _get_parametro_float('silo_ocupacion_alerta_pct', 90.0)
+    silos_activos = Silo.query.filter_by(estado='activo').all()
+    for silo in silos_activos:
+        inventario = InventarioSilo.query.filter_by(id_silo=silo.id_silo).all()
+        galones = sum(float(item.galones) for item in inventario)
+        cap = float(silo.capacidad_gal) if silo.capacidad_gal else 0
+        if cap > 0:
+            pct = (galones / cap) * 100
+            if pct >= umbral_silo:
+                alertas.append({
+                    'tipo': 'silo_ocupacion_alta',
+                    'severidad': 'warning' if pct < 98 else 'danger',
+                    'clave_unica': f'silo:{silo.id_silo}:ocupacion_alta',
+                    'mensaje': f'Silo {silo.nombre_silo} al {pct:.1f}% de ocupación.',
+                    'url': url_for('ver_inventario_silo', id_silo=silo.id_silo),
+                })
+
+    # ------------------------------------------------------------------
+    # 2. LOTES: Brix, relación o pulpa fuera de rango
+    # ------------------------------------------------------------------
+    # Umbrales por tipo de producto (concentrado / pulpa / colateral).
+    # Solo aplica si el parámetro existe.
+    rangos_brix = {
+        'concentrado': (_get_parametro_float('brix_min_concentrado'), _get_parametro_float('brix_max_concentrado')),
+        'pulpa':       (_get_parametro_float('brix_min_pulpa'),       _get_parametro_float('brix_max_pulpa')),
+        'colateral':   (_get_parametro_float('brix_min_colateral'),   _get_parametro_float('brix_max_colateral')),
+    }
+    rangos_relacion = {
+        'concentrado': (_get_parametro_float('relacion_min_concentrado'), _get_parametro_float('relacion_max_concentrado')),
+    }
+    rangos_pulpa = {
+        'concentrado': (_get_parametro_float('pulpa_min_concentrado'), _get_parametro_float('pulpa_max_concentrado')),
+    }
+
+    lotes = Lote.query.filter(Lote.brix.isnot(None) | Lote.relacion.isnot(None) | Lote.pulpa.isnot(None)).all()
+    # Determinar tipo de producto por cliente o por nombre (heurística simple:
+    # si el cliente/estado sugiere pulpa o concentrado). Si no se puede, se
+    # evalúan los rangos de concentrado como default.
+    for lote in lotes:
+        # Usar 'concentrado' como tipo por defecto para validar rangos.
+        # (En producción esto podría venir de un campo tipo_producto en Lote.)
+        tipo_prod = 'concentrado'
+        bmin, bmax = rangos_brix.get(tipo_prod, (None, None))
+        rmin, rmax = rangos_relacion.get(tipo_prod, (None, None))
+        pmin, pmax = rangos_pulpa.get(tipo_prod, (None, None))
+
+        problemas = []
+        if lote.brix is not None and (bmin is not None or bmax is not None):
+            if bmin is not None and float(lote.brix) < bmin:
+                problemas.append(f'Brix {float(lote.brix):.2f} < {bmin}')
+            if bmax is not None and float(lote.brix) > bmax:
+                problemas.append(f'Brix {float(lote.brix):.2f} > {bmax}')
+        if lote.relacion is not None and (rmin is not None or rmax is not None):
+            if rmin is not None and float(lote.relacion) < rmin:
+                problemas.append(f'Relación {float(lote.relacion):.2f} < {rmin}')
+            if rmax is not None and float(lote.relacion) > rmax:
+                problemas.append(f'Relación {float(lote.relacion):.2f} > {rmax}')
+        if lote.pulpa is not None and (pmin is not None or pmax is not None):
+            if pmin is not None and float(lote.pulpa) < pmin:
+                problemas.append(f'Pulpa {float(lote.pulpa):.2f} < {pmin}')
+            if pmax is not None and float(lote.pulpa) > pmax:
+                problemas.append(f'Pulpa {float(lote.pulpa):.2f} > {pmax}')
+
+        if problemas:
+            alertas.append({
+                'tipo': 'lote_fuera_rango',
+                'severidad': 'danger',
+                'clave_unica': f'lote:{lote.id_lote}:fuera_rango',
+                'mensaje': f'Lote {lote.codigo_lote}: {"; ".join(problemas)}.',
+                'url': '#',
+            })
+
+    # ------------------------------------------------------------------
+    # 3. EMBARQUES: checklist de pulpa / tambor / tiempo documental
+    # ------------------------------------------------------------------
+    embarques = Embarque.query.filter(Embarque.estatus != 'cancelado').all()
+    for emb in embarques:
+        detalle = emb.detalle
+        tiempos = emb.tiempos
+        tipo_unidad = emb.tipo_unidad or ''
+        es_tambor = tipo_unidad == 'tambores'
+        es_pulpa = emb.producto and emb.producto.tipo == 'pulpa'
+
+        # Pulpa sin Check List (solo si el producto es pulpa y el detalle existe)
+        if es_pulpa and detalle is not None and detalle.check_list is not True:
+            alertas.append({
+                'tipo': 'embarque_sin_checklist',
+                'severidad': 'warning',
+                'clave_unica': f'embarque:{emb.id_embarque}:sin_checklist',
+                'mensaje': f'Embarque {emb.num_cita} (Pulpa) sin Check List registrado.',
+                'url': url_for('editar_embarque', id_embarque=emb.id_embarque),
+            })
+
+        # Tambor sin lote de tambor
+        if es_tambor and (detalle is None or not detalle.lote_tambor):
+            alertas.append({
+                'tipo': 'embarque_sin_lote_tambor',
+                'severidad': 'warning',
+                'clave_unica': f'embarque:{emb.id_embarque}:sin_lote_tambor',
+                'mensaje': f'Embarque {emb.num_cita} (Tambores) sin lote de tambor registrado.',
+                'url': url_for('editar_embarque', id_embarque=emb.id_embarque),
+            })
+
+        # Sin tiempo documental (documentación) cuando está en planta o cargado
+        if emb.estatus in ('en_planta', 'cargado') and (tiempos is None or tiempos.documentacion is None):
+            alertas.append({
+                'tipo': 'embarque_sin_documentacion',
+                'severidad': 'info',
+                'clave_unica': f'embarque:{emb.id_embarque}:sin_documentacion',
+                'mensaje': f'Embarque {emb.num_cita} sin fecha de documentación.',
+                'url': url_for('editar_embarque', id_embarque=emb.id_embarque),
+            })
+
+    # ------------------------------------------------------------------
+    # 4. EMBARQUES: en planta por más de X horas / programado vencido
+    # ------------------------------------------------------------------
+    max_horas_planta = _get_parametro_float('embarque_en_planta_max_horas', 24.0)
+    for emb in embarques:
+        if emb.estatus == 'en_planta':
+            tiempos = emb.tiempos
+            ref = None
+            if tiempos:
+                ref = tiempos.entrada or tiempos.llegada
+            if ref is not None:
+                horas = (ahora - ref).total_seconds() / 3600.0
+                if horas > max_horas_planta:
+                    alertas.append({
+                        'tipo': 'embarque_tiempo_excedido',
+                        'severidad': 'danger',
+                        'clave_unica': f'embarque:{emb.id_embarque}:tiempo_excedido',
+                        'mensaje': f'Embarque {emb.num_cita} en planta por {horas:.1f} h (máx {max_horas_planta:.0f} h).',
+                        'url': url_for('editar_embarque', id_embarque=emb.id_embarque),
+                    })
+        elif emb.estatus == 'programado' and emb.fecha_embarque and emb.fecha_embarque < hoy:
+            alertas.append({
+                'tipo': 'embarque_programado_vencido',
+                'severidad': 'warning',
+                'clave_unica': f'embarque:{emb.id_embarque}:programado_vencido',
+                'mensaje': f'Embarque {emb.num_cita} programado para {emb.fecha_embarque} y aún no llega.',
+                'url': url_for('editar_embarque', id_embarque=emb.id_embarque),
+            })
+
+    # ------------------------------------------------------------------
+    # 5. EMPAQUE: negativo, sin stock, bajo mínimo, diferencia con Dynamics
+    # ------------------------------------------------------------------
+    articulos = EmpaqueArticulo.query.filter_by(activo=True).all()
+    for art in articulos:
+        stock = art.stock_actual
+        fisico = art.fisico_dynamics
+        minimo = art.stock_minimo
+        clave, etiqueta, color = _empaque_estado_desde_valores(stock, fisico, minimo)
+        # Solo reportar estados problemáticos (no success ni info)
+        if color in ('danger', 'warning'):
+            severidad = color  # danger/warning ya coinciden
+            alertas.append({
+                'tipo': f'empaque_{clave}',
+                'severidad': severidad,
+                'clave_unica': f'empaque:{art.id_articulo}:{clave}',
+                'mensaje': f'{art.nombre}: {etiqueta} (stock {_empaque_format_numero(stock, art.um)} {art.um}).',
+                'url': url_for('empaque_inventario'),
+            })
+
+    return alertas
+
+
+# ----------------------------------------------------------------------
+# Sincronización de alertas y generación de notificaciones
+# ----------------------------------------------------------------------
+
+_TITULOS_POR_TIPO = {
+    'silo_ocupacion_alta': 'Silo con ocupación alta',
+    'lote_fuera_rango': 'Lote fuera de rango',
+    'embarque_sin_checklist': 'Embarque de pulpa sin Check List',
+    'embarque_sin_lote_tambor': 'Embarque de tambores sin lote',
+    'embarque_sin_documentacion': 'Embarque sin documentación',
+    'embarque_tiempo_excedido': 'Embarque excede tiempo en planta',
+    'embarque_programado_vencido': 'Embarque programado vencido',
+}
+
+
+def _titulo_por_tipo(tipo):
+    """Genera un título legible para la notificación según el tipo de alerta."""
+    if tipo in _TITULOS_POR_TIPO:
+        return _TITULOS_POR_TIPO[tipo]
+    if tipo.startswith('empaque_'):
+        return 'Empaque: stock fuera de parámetros'
+    return 'Alerta del sistema'
+
+
+def _generar_notificaciones(alerta):
+    """
+    Crea notificaciones para los usuarios del área correspondiente.
+    - Si hay registros en alerta_destinatarios para el tipo, solo esas áreas.
+    - Si no hay registros, todos los usuarios activos.
+    - No crea notificaciones duplicadas (id_alerta + id_usuario).
+    """
+    destinatarios = AlertaDestinatario.query.filter_by(tipo_alerta=alerta.tipo).all()
+    if destinatarios:
+        areas = [d.area for d in destinatarios]
+        usuarios = Usuario.query.filter(
+            Usuario.activo == True,  # noqa: E712
+            Usuario.area.in_(areas)
+        ).all()
+    else:
+        usuarios = Usuario.query.filter_by(activo=True).all()
+
+    for u in usuarios:
+        existe = Notificacion.query.filter_by(
+            id_alerta=alerta.id,
+            id_usuario=u.id_usuario
+        ).first()
+        if existe is None:
+            db.session.add(Notificacion(
+                id_usuario=u.id_usuario,
+                id_alerta=alerta.id,
+                titulo=_titulo_por_tipo(alerta.tipo),
+                mensaje=alerta.mensaje,
+                url=alerta.url,
+                leida=False,
+            ))
+
+
+def sincronizar_alertas():
+    """
+    Calcula alertas actuales, las persiste en la tabla `alertas` (upsert por
+    clave_unica), genera notificaciones por área y cierra las que ya no
+    aplican. Devuelve la lista de alertas activas (dicts) para el dashboard.
+
+    Regla anti-spam: una alerta activa no vuelve a generar notificaciones.
+    Solo se notifica cuando una alerta nueva aparece o una cerrada reaparece.
+    """
+    alertas_calculadas = calcular_alertas()
+    claves_actuales = {a['clave_unica'] for a in alertas_calculadas}
+
+    # 1. Cerrar alertas activas que ya no aplican
+    if claves_actuales:
+        Alerta.query.filter(
+            Alerta.estado == 'activa',
+            ~Alerta.clave_unica.in_(claves_actuales)
+        ).update({Alerta.estado: 'cerrada', Alerta.actualizada_en: datetime.utcnow()},
+                 synchronize_session=False)
+    else:
+        Alerta.query.filter_by(estado='activa').update(
+            {Alerta.estado: 'cerrada', Alerta.actualizada_en: datetime.utcnow()},
+            synchronize_session=False)
+
+    # 2. Upsert de alertas calculadas
+    for a in alertas_calculadas:
+        alerta = Alerta.query.filter_by(clave_unica=a['clave_unica']).first()
+        if alerta is None:
+            alerta = Alerta(
+                tipo=a['tipo'],
+                severidad=a['severidad'],
+                clave_unica=a['clave_unica'],
+                mensaje=a['mensaje'],
+                url=a['url'],
+                estado='activa',
+            )
+            db.session.add(alerta)
+            db.session.flush()
+            _generar_notificaciones(alerta)
+        else:
+            alerta.tipo = a['tipo']
+            alerta.severidad = a['severidad']
+            alerta.mensaje = a['mensaje']
+            alerta.url = a['url']
+            if alerta.estado == 'cerrada':
+                # Reapareció: reabrir y volver a notificar
+                alerta.estado = 'activa'
+                alerta.atendida_por = None
+                alerta.atendida_en = None
+                _generar_notificaciones(alerta)
+
+    db.session.commit()
+
+    activas = Alerta.query.filter_by(estado='activa').order_by(
+        db.case(
+            (Alerta.severidad == 'danger', 0),
+            (Alerta.severidad == 'warning', 1),
+            else_=2
+        ),
+        Alerta.creada_en.desc()
+    ).all()
+
+    return [{
+        'id': a.id,
+        'tipo': a.tipo,
+        'severidad': a.severidad,
+        'clave_unica': a.clave_unica,
+        'mensaje': a.mensaje,
+        'url': a.url,
+    } for a in activas]
+
+
+# ----------------------------------------------------------------------
+# Cuadre de galonaje
+# ----------------------------------------------------------------------
+
+# Constante: galones por litro (1 galón US = 3.78541 L)
+GALONES_POR_LITRO = Decimal('3.78541')
+
+
+def _get_densidad(id_producto, brix):
+    """
+    Devuelve la densidad (kg/L) para un producto y Brix dados.
+    - Busca en la tabla densidad_brix.
+    - Si hay una fila con el Brix exacto, la devuelve.
+    - Si no, interpola linealmente entre las dos filas más cercanas.
+    - Si no hay datos para el producto, devuelve None.
+    """
+    if id_producto is None or brix is None:
+        return None
+    brix = float(brix)
+    filas = DensidadBrix.query.filter_by(id_producto=id_producto) \
+        .order_by(DensidadBrix.brix).all()
+    if not filas:
+        return None
+    # Brix exacto
+    for f in filas:
+        if abs(float(f.brix) - brix) < 1e-6:
+            return float(f.densidad_kg_l)
+    # Fuera de rango: usar el extremo más cercano (sin extrapolar)
+    if brix <= float(filas[0].brix):
+        return float(filas[0].densidad_kg_l)
+    if brix >= float(filas[-1].brix):
+        return float(filas[-1].densidad_kg_l)
+    # Interpolación lineal
+    for i in range(len(filas) - 1):
+        b0 = float(filas[i].brix)
+        b1 = float(filas[i + 1].brix)
+        if b0 < brix < b1:
+            d0 = float(filas[i].densidad_kg_l)
+            d1 = float(filas[i + 1].densidad_kg_l)
+            return d0 + (d1 - d0) * (brix - b0) / (b1 - b0)
+    return None
+
+
+def _estado_cuadre(dif_pct, tolerancia_pct):
+    """
+    Devuelve el estado del cuadre según la diferencia porcentual.
+    - 'cuadra': |dif| <= 0.1% (diferencia despreciable)
+    - 'dentro_tolerancia': 0.1% < |dif| <= tolerancia
+    - 'descuadre': |dif| > tolerancia
+    - 'sin_datos': no hay suficientes datos para comparar
+    """
+    if dif_pct is None:
+        return 'sin_datos'
+    tol = float(tolerancia_pct) if tolerancia_pct is not None else 1.0
+    adif = abs(dif_pct)
+    if adif <= 0.1:
+        return 'cuadra'
+    if adif <= tol:
+        return 'dentro_tolerancia'
+    return 'descuadre'
+
+
+def _calcular_cuadre_embarque(embarque, tolerancia_pct):
+    """
+    Calcula el cuadre de galonaje para un embarque.
+    Compara tres cifras:
+      1. Galones por peso: neto_kg ÷ (densidad_kg/L × 3.78541)
+      2. Galones declarados por lote: SUM(embarque_lotes.cantidad)
+      3. Galones de inventario: SUM(movimientos.galones) vía id_movimiento
+
+    Devuelve un dict con todas las cifras, diferencias y estados.
+    """
+    # --- Brix promedio del embarque (promedio de los lotes) ---
+    lotes = embarque.lotes or []
+    brix_values = []
+    for el in lotes:
+        if el.lote and el.lote.brix is not None:
+            brix_values.append(float(el.lote.brix))
+    brix_promedio = (sum(brix_values) / len(brix_values)) if brix_values else None
+
+    # --- 1. Galones por peso ---
+    galones_peso = None
+    peso_neto = None
+    densidad = None
+    if embarque.pesos and embarque.pesos.peso_neto_kg is not None:
+        peso_neto = float(embarque.pesos.peso_neto_kg)
+        id_producto = embarque.id_producto
+        densidad = _get_densidad(id_producto, brix_promedio)
+        if densidad and densidad > 0:
+            # galones = kg ÷ (densidad kg/L × 3.78541 L/gal)
+            galones_peso = peso_neto / (densidad * float(GALONES_POR_LITRO))
+
+    # --- 2. Galones declarados por lote ---
+    galones_lotes = 0.0
+    for el in lotes:
+        if el.cantidad is not None:
+            galones_lotes += float(el.cantidad)
+
+    # --- 3. Galones de inventario (movimientos vinculados) ---
+    galones_inventario = None
+    movimientos_encontrados = []
+    for el in lotes:
+        if el.id_movimiento is not None and el.movimiento:
+            mov = el.movimiento
+            # Los movimientos de salida restan; el signo depende de cómo
+            # se registró. Aquí usamos el valor absoluto para la comparación.
+            mov_val = float(mov.galones) if mov.galones is not None else 0.0
+            movimientos_encontrados.append(mov_val)
+    if movimientos_encontrados:
+        galones_inventario = sum(movimientos_encontrados)
+
+    # --- Diferencias ---
+    def _dif(cifra_base, cifra_ref):
+        if cifra_base is None or cifra_ref is None or cifra_ref == 0:
+            return None
+        return ((cifra_base - cifra_ref) / cifra_ref) * 100.0
+
+    # Base de comparación: lotes (papel). Si no hay lotes, usar peso.
+    base = galones_lotes if galones_lotes > 0 else galones_peso
+
+    dif_peso_lotes = _dif(galones_peso, galones_lotes)
+    dif_inv_lotes = _dif(galones_inventario, galones_lotes)
+    dif_peso_inv = _dif(galones_peso, galones_inventario)
+
+    # Estado general: peor caso entre peso y inventario contra lotes
+    difs = [d for d in (dif_peso_lotes, dif_inv_lotes) if d is not None]
+    peor_dif = max(difs, key=abs) if difs else None
+    estado = _estado_cuadre(peor_dif, tolerancia_pct)
+
+    return {
+        'embarque': embarque,
+        'brix_promedio': brix_promedio,
+        'densidad': densidad,
+        'peso_neto': peso_neto,
+        'galones_peso': galones_peso,
+        'galones_lotes': galones_lotes,
+        'galones_inventario': galones_inventario,
+        'dif_peso_lotes': dif_peso_lotes,
+        'dif_inv_lotes': dif_inv_lotes,
+        'dif_peso_inv': dif_peso_inv,
+        'dif_lotes_abs': galones_lotes - galones_inventario if galones_inventario is not None else None,
+        'dif_peso_lotes_abs': galones_peso - galones_lotes if galones_peso is not None else None,
+        'estado': estado,
+    }
+
+
 def _empaque_format_numero(valor, um=None):
     """
     Formatea un número para UI según la unidad de medida.
@@ -1096,8 +1740,9 @@ def _block_guest_writes():
     endpoint = endpoint_full.split('.')[-1]
 
     if metodo not in ('GET', 'HEAD', 'OPTIONS'):
-        flash(f'Acceso denegado ({metodo}): usuario invitado no puede modificar datos.')
-        return redirect(url_for('index'))
+        if endpoint not in RUTAS_POST_PERMITIDAS_INVITADO:
+            flash(f'Acceso denegado ({metodo}): usuario invitado no puede modificar datos.')
+            return redirect(url_for('index'))
 
     if metodo == 'GET':
         if endpoint in RUTAS_NO_PERMITIDAS_INVITADO:
@@ -1107,6 +1752,18 @@ def _block_guest_writes():
             if endpoint in RUTAS_NO_PERMITIDAS_INVITADO or endpoint.startswith('gestionar') or endpoint.startswith('nuevo_') or endpoint.startswith('registrar_'):
                 flash('Acceso denegado: el usuario invitado solo puede visualizar datos.')
                 return redirect(url_for('index'))
+
+@app.before_request
+def _forzar_cambio_password():
+    if not current_user.is_authenticated:
+        return None
+    endpoint = (request.endpoint or '').split('.')[-1]
+    # Permitir rutas de seguridad y logout mientras se cambia la contraseña
+    if endpoint in ('cambiar_password', 'logout', 'login', 'static'):
+        return None
+    if getattr(current_user, 'debe_cambiar_password', False):
+        flash('Por seguridad, debe cambiar su contraseña antes de continuar.', 'warning')
+        return redirect(url_for('cambiar_password'))
 
 # Rutas
 @app.route('/')
@@ -1219,6 +1876,8 @@ def index():
         'porcentaje_total': round(porcentaje_total, 2),
         'silos_ocupados': silos_ocupados,
         'silos_totales': len(silos),
+        'capacidad_total': capacidad_total,
+        'capacidad_disponible': max(capacidad_total - total_galones, 0),
         'clientes': clientes_stats_list,
         'estados': estados_stats,
         'estados_list': estados_list
@@ -1728,23 +2387,115 @@ def nuevo_usuario():
             
     return render_template('admin/usuario_form.html', usuario=None)
 
+@app.route('/admin/usuarios/<int:id_usuario>/editar', methods=['GET', 'POST'])
+@login_required
+def editar_usuario(id_usuario):
+    if current_user.rol != 'administrador':
+        flash('Acceso denegado.')
+        return redirect(url_for('index'))
+    usu = Usuario.query.get_or_404(id_usuario)
+    if request.method == 'POST':
+        nombre = request.form.get('nombre')
+        usuario = request.form.get('usuario')
+        password = request.form.get('password')
+        rol = request.form.get('rol')
+        # Validar unicidad del nombre de usuario (excluyendo el actual)
+        otro = Usuario.query.filter_by(usuario=usuario).first()
+        if otro and otro.id_usuario != id_usuario:
+            flash('El nombre de usuario ya existe.')
+        else:
+            usu.nombre = nombre
+            usu.usuario = usuario
+            usu.rol = rol
+            if password:
+                usu.password = generate_password_hash(password)
+            db.session.commit()
+            flash('Usuario actualizado correctamente.')
+            return redirect(url_for('gestionar_usuarios'))
+    return render_template('admin/usuario_form.html', usuario=usu)
+
+@app.route('/admin/usuarios/<int:id_usuario>/eliminar', methods=['POST'])
+@login_required
+def eliminar_usuario(id_usuario):
+    if current_user.rol != 'administrador':
+        flash('Acceso denegado.')
+        return redirect(url_for('index'))
+    if id_usuario == current_user.id_usuario:
+        flash('No puedes eliminar tu propio usuario.', 'warning')
+        return redirect(url_for('gestionar_usuarios'))
+    usu = Usuario.query.get_or_404(id_usuario)
+    try:
+        db.session.delete(usu)
+        db.session.commit()
+        flash(f'Usuario "{usu.usuario}" eliminado correctamente.', 'success')
+    except Exception:
+        # Si hay registros dependientes, desactivar en lugar de eliminar
+        db.session.rollback()
+        usu.activo = False
+        db.session.commit()
+        flash(f'No se pudo eliminar por registros asociados. Se desactivó el usuario "{usu.usuario}".', 'warning')
+    return redirect(url_for('gestionar_usuarios'))
+
+@app.route('/admin/usuarios/<int:id_usuario>/toggle', methods=['POST'])
+@login_required
+def toggle_usuario(id_usuario):
+    if current_user.rol != 'administrador':
+        flash('Acceso denegado.')
+        return redirect(url_for('index'))
+    if id_usuario == current_user.id_usuario:
+        flash('No puedes cambiar el estado de tu propio usuario.', 'warning')
+        return redirect(url_for('gestionar_usuarios'))
+    usu = Usuario.query.get_or_404(id_usuario)
+    usu.activo = not usu.activo
+    db.session.commit()
+    flash(f'Usuario {"activado" if usu.activo else "desactivado"} correctamente.', 'success')
+    return redirect(url_for('gestionar_usuarios'))
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
         return redirect(url_for('index'))
     if request.method == 'POST':
-        usuario = request.form.get('usuario')
-        password = request.form.get('password')
+        usuario = (request.form.get('usuario') or '').strip()
+        password = request.form.get('password') or ''
+
+        # Límite de intentos fallidos por IP + usuario (5 por ventana de 15 min)
+        MAX_INTENTOS = 5
+        VENTANA_MIN = 15
+        ahora = datetime.now()
+        key = f'_login_fails_{request.remote_addr}_{usuario}'
+        fallos = session.get(key, {'count': 0, 'until': None})
+        until = fallos.get('until')
+        if until:
+            until_dt = datetime.fromisoformat(until)
+            if ahora < until_dt:
+                restante = int((until_dt - ahora).total_seconds() // 60) + 1
+                flash(f'Demasiados intentos fallidos. Intente nuevamente en {restante} minuto(s).')
+                return render_template('login.html')
+            else:
+                fallos = {'count': 0, 'until': None}
+
         user = Usuario.query.filter_by(usuario=usuario).first()
-        
+
         if user and check_password_hash(user.password, password):
             if user.activo:
+                # Resetear contador de fallos al autenticar correctamente
+                session.pop(key, None)
                 login_user(user)
+                if user.debe_cambiar_password:
+                    flash('Por seguridad, debe cambiar su contraseña antes de continuar.', 'warning')
+                    return redirect(url_for('cambiar_password'))
                 return redirect(url_for('index'))
             else:
                 flash('Usuario inactivo. Contacte al administrador.')
         else:
-            flash('Usuario o contraseña incorrectos.')
+            fallos['count'] = fallos.get('count', 0) + 1
+            if fallos['count'] >= MAX_INTENTOS:
+                fallos['until'] = (ahora + timedelta(minutes=VENTANA_MIN)).isoformat()
+                flash(f'Demasiados intentos fallidos. Intente nuevamente en {VENTANA_MIN} minutos.')
+            else:
+                flash('Usuario o contraseña incorrectos.')
+            session[key] = fallos
     return render_template('login.html')
 
 @app.route('/logout')
@@ -1753,10 +2504,111 @@ def logout():
     logout_user()
     return redirect(url_for('login'))
 
-@app.route('/reset-silos')
+
+# =====================================================================
+# ===== NOTIFICACIONES =================================================
+# =====================================================================
+
+@app.route('/notificaciones')
+@login_required
+def notificaciones():
+    """Página de notificaciones del usuario."""
+    sincronizar_alertas()
+    todas = Notificacion.query.filter_by(id_usuario=current_user.id_usuario) \
+        .order_by(Notificacion.creada_en.desc()).limit(200).all()
+    return render_template('notificaciones.html', notificaciones=todas)
+
+
+@app.route('/notificaciones/<int:id_notif>/leer', methods=['POST'])
+@login_required
+def notificacion_leer(id_notif):
+    """Marca una notificación como leída (solo si pertenece al usuario)."""
+    n = Notificacion.query.get_or_404(id_notif)
+    if n.id_usuario != current_user.id_usuario:
+        abort(403)
+    n.leida = True
+    db.session.commit()
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return jsonify({'ok': True, 'no_leidas': _contar_no_leidas()})
+    return redirect(request.referrer or url_for('notificaciones'))
+
+
+@app.route('/notificaciones/leer-todas', methods=['POST'])
+@login_required
+def notificacion_leer_todas():
+    """Marca todas las notificaciones del usuario como leídas."""
+    Notificacion.query.filter_by(
+        id_usuario=current_user.id_usuario, leida=False
+    ).update({Notificacion.leida: True}, synchronize_session=False)
+    db.session.commit()
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return jsonify({'ok': True, 'no_leidas': 0})
+    return redirect(url_for('notificaciones'))
+
+
+@app.route('/api/notificaciones')
+@login_required
+def api_notificaciones():
+    """
+    Endpoint JSON para polling del navegador (cada 60 s).
+    Devuelve: no_leidas (int) y lista de notificaciones recientes (5).
+    """
+    sincronizar_alertas()
+    no_leidas = _contar_no_leidas()
+    recientes = Notificacion.query.filter_by(id_usuario=current_user.id_usuario) \
+        .order_by(Notificacion.creada_en.desc()).limit(10).all()
+    return jsonify({
+        'no_leidas': no_leidas,
+        'notificaciones': [{
+            'id': n.id,
+            'titulo': n.titulo,
+            'mensaje': n.mensaje,
+            'url': n.url,
+            'leida': n.leida,
+            'creada_en': n.creada_en.strftime('%Y-%m-%d %H:%M') if n.creada_en else '',
+        } for n in recientes],
+    })
+
+
+def _contar_no_leidas():
+    if not current_user.is_authenticated:
+        return 0
+    return Notificacion.query.filter_by(
+        id_usuario=current_user.id_usuario, leida=False
+    ).count()
+
+
+@app.route('/cambiar-password', methods=['GET', 'POST'])
+@login_required
+def cambiar_password():
+    if request.method == 'POST':
+        actual = request.form.get('password_actual') or ''
+        nueva = request.form.get('password_nueva') or ''
+        confirmar = request.form.get('password_confirmar') or ''
+
+        if not check_password_hash(current_user.password, actual):
+            flash('La contraseña actual es incorrecta.', 'danger')
+        elif len(nueva) < 8:
+            flash('La nueva contraseña debe tener al menos 8 caracteres.', 'danger')
+        elif nueva != confirmar:
+            flash('Las contraseñas nuevas no coinciden.', 'danger')
+        elif nueva == actual:
+            flash('La nueva contraseña no puede ser igual a la actual.', 'danger')
+        else:
+            current_user.password = generate_password_hash(nueva)
+            current_user.debe_cambiar_password = False
+            db.session.commit()
+            flash('Contraseña actualizada correctamente.', 'success')
+            return redirect(url_for('index'))
+
+    return render_template('cambiar_password.html',
+                           forzar_cambio=bool(getattr(current_user, 'debe_cambiar_password', False)))
+
+@app.route('/reset-silos', methods=['POST'])
 @login_required
 def reset_silos():
-    if _deny_if_guest():
+    if (current_user.rol or '').strip().lower() != 'administrador':
+        flash('Acceso denegado: solo el administrador puede resetear los silos.', 'danger')
         return redirect(url_for('index'))
     try:
         silos = Silo.query.all()
@@ -1770,6 +2622,313 @@ def reset_silos():
         flash(f'Error: {str(e)}', 'danger')
     
     return redirect(url_for('index'))
+
+@app.route('/admin/silos', methods=['GET', 'POST'])
+@login_required
+def configurar_silos():
+    """Configuración de silos: alta, edición, activar/desactivar y eliminar."""
+    if current_user.rol != 'administrador':
+        flash('Acceso denegado.', 'danger')
+        return redirect(url_for('index'))
+
+    if request.method == 'POST':
+        accion = request.form.get('accion', '').strip()
+        id_edit = _parse_int_or_none(request.form.get('id_silo'))
+        try:
+            if accion == 'guardar':
+                if id_edit:
+                    silo = Silo.query.get_or_404(id_edit)
+                else:
+                    silo = Silo()
+                    db.session.add(silo)
+                silo.nombre_silo = (request.form.get('nombre_silo') or '').strip()
+                silo.capacidad_gal = _parse_decimal_or_none(request.form.get('capacidad_gal'))
+                silo.capacidad_barriles = _parse_decimal_or_none(request.form.get('capacidad_barriles'))
+                silo.tipo_producto = (request.form.get('tipo_producto') or '').strip() or None
+                silo.tipo_permitido = (request.form.get('tipo_permitido') or '').strip() or None
+                if not silo.nombre_silo:
+                    flash('El nombre del silo es obligatorio.', 'danger')
+                    db.session.rollback()
+                    return redirect(url_for('configurar_silos'))
+                db.session.commit()
+                flash(f'Silo "{silo.nombre_silo}" guardado correctamente.', 'success')
+            elif accion == 'toggle':
+                silo = Silo.query.get_or_404(id_edit)
+                silo.estado = 'inactivo' if silo.estado == 'activo' else 'activo'
+                db.session.commit()
+                flash(f'Silo "{silo.nombre_silo}" {silo.estado}.', 'success')
+            elif accion == 'eliminar':
+                silo = Silo.query.get_or_404(id_edit)
+                # Validar que no tenga inventario ni movimientos
+                tiene_inv = InventarioSilo.query.filter_by(id_silo=id_edit).first()
+                tiene_mov = Movimiento.query.filter_by(id_silo=id_edit).first()
+                if tiene_inv or tiene_mov:
+                    flash(f'No se puede eliminar el silo "{silo.nombre_silo}" porque tiene inventario o movimientos asociados. Desactívelo en su lugar.', 'danger')
+                else:
+                    db.session.delete(silo)
+                    db.session.commit()
+                    flash(f'Silo "{silo.nombre_silo}" eliminado correctamente.', 'success')
+        except Exception as e:
+            db.session.rollback()
+            msg = str(e)
+            if 'Duplicate entry' in msg:
+                msg = 'Ya existe un silo con ese nombre.'
+            flash(f'Error: {msg}', 'danger')
+        return redirect(url_for('configurar_silos'))
+
+    silos = Silo.query.order_by(Silo.nombre_silo).all()
+    return render_template('admin/silos.html', silos=silos)
+
+@app.route('/tqpf', methods=['GET', 'POST'])
+@login_required
+def inventario_tqpf():
+    """
+    Inventario de tanques de proceso (TQPF).
+
+    Muestra el contenido de cada tanque (lote, Brix y galones), el total y
+    el porcentaje de ocupación. Permite registrar la entrada de un lote y
+    vaciar un lote del tanque. El inventario de TQPF es independiente del
+    inventario de silos.
+    """
+    if request.method == 'POST':
+        accion = (request.form.get('accion') or '').strip()
+        try:
+            if accion == 'entrada':
+                id_tanque = _parse_int_or_none(request.form.get('id_tanque'))
+                id_lote = _parse_int_or_none(request.form.get('id_lote'))
+                galones = _parse_decimal_or_none(request.form.get('galones'))
+                tanque = TanqueTQPF.query.get(id_tanque) if id_tanque else None
+                lote = Lote.query.get(id_lote) if id_lote else None
+                if not tanque:
+                    flash('Selecciona un tanque válido.', 'danger')
+                elif not lote:
+                    flash('Selecciona un lote válido.', 'danger')
+                elif galones is None or galones <= 0:
+                    flash('Captura una cantidad de galones mayor a cero.', 'danger')
+                else:
+                    # El último ingreso queda en la posición 1 (consumo LIFO):
+                    # se desplazan +1 las posiciones existentes del tanque.
+                    existentes = InventarioTQPF.query.filter_by(id_tanque=tanque.id_tanque).all()
+                    for it in existentes:
+                        it.posicion = (it.posicion or 0) + 1
+                    db.session.add(InventarioTQPF(
+                        id_tanque=tanque.id_tanque,
+                        id_lote=lote.id_lote,
+                        posicion=1,
+                        galones=galones,
+                    ))
+                    db.session.commit()
+                    flash(f'Se registraron {galones} gal del lote {lote.codigo_lote} en {tanque.nombre_tanque}.', 'success')
+            elif accion == 'vaciar':
+                item = InventarioTQPF.query.get_or_404(_parse_int_or_none(request.form.get('id_inventario_tqpf')))
+                db.session.delete(item)
+                db.session.commit()
+                flash('Se vació el lote del tanque.', 'success')
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Error: {e}', 'danger')
+        return redirect(url_for('inventario_tqpf'))
+
+    tanques = TanqueTQPF.query.order_by(TanqueTQPF.nombre_tanque).all()
+    detalle = {}
+    total_general = Decimal('0')
+    for t in tanques:
+        items = (InventarioTQPF.query.filter_by(id_tanque=t.id_tanque)
+                 .order_by(InventarioTQPF.posicion.asc(),
+                           InventarioTQPF.id_inventario_tqpf.asc()).all())
+        galones = sum((Decimal(str(i.galones or 0)) for i in items), Decimal('0'))
+        cap = Decimal(str(t.capacidad_gal or 0))
+        pct = (galones / cap * 100) if cap > 0 else Decimal('0')
+        detalle[t.id_tanque] = {'filas': items, 'galones': galones, 'pct': pct}
+        total_general += galones
+
+    lotes = Lote.query.order_by(Lote.codigo_lote).all()
+    return render_template('tqpf.html', tanques=tanques, detalle=detalle,
+                           total_general=total_general, lotes=lotes)
+
+
+@app.route('/admin/tqpf', methods=['GET', 'POST'])
+@login_required
+def configurar_tqpf():
+    """Configuración de tanques de proceso (TQPF): alta, edición, activar/desactivar y eliminar."""
+    if current_user.rol != 'administrador':
+        flash('Acceso denegado.', 'danger')
+        return redirect(url_for('index'))
+
+    if request.method == 'POST':
+        accion = (request.form.get('accion') or '').strip()
+        id_edit = _parse_int_or_none(request.form.get('id_tanque'))
+        try:
+            if accion == 'guardar':
+                if id_edit:
+                    tanque = TanqueTQPF.query.get_or_404(id_edit)
+                else:
+                    tanque = TanqueTQPF()
+                    db.session.add(tanque)
+                tanque.nombre_tanque = (request.form.get('nombre_tanque') or '').strip()
+                tanque.capacidad_gal = _parse_decimal_or_none(request.form.get('capacidad_gal'))
+                tanque.tipo_producto = (request.form.get('tipo_producto') or '').strip() or None
+                if not tanque.nombre_tanque:
+                    flash('El nombre del tanque es obligatorio.', 'danger')
+                    db.session.rollback()
+                    return redirect(url_for('configurar_tqpf'))
+                db.session.commit()
+                flash(f'Tanque "{tanque.nombre_tanque}" guardado correctamente.', 'success')
+            elif accion == 'toggle':
+                tanque = TanqueTQPF.query.get_or_404(id_edit)
+                tanque.estado = 'inactivo' if tanque.estado == 'activo' else 'activo'
+                db.session.commit()
+                flash(f'Tanque "{tanque.nombre_tanque}" {tanque.estado}.', 'success')
+            elif accion == 'eliminar':
+                tanque = TanqueTQPF.query.get_or_404(id_edit)
+                # No se permite eliminar si todavía tiene inventario asociado.
+                tiene_inv = InventarioTQPF.query.filter_by(id_tanque=id_edit).first()
+                if tiene_inv:
+                    flash(f'No se puede eliminar el tanque "{tanque.nombre_tanque}" porque tiene inventario asociado. Desactívelo en su lugar.', 'danger')
+                else:
+                    db.session.delete(tanque)
+                    db.session.commit()
+                    flash(f'Tanque "{tanque.nombre_tanque}" eliminado correctamente.', 'success')
+        except Exception as e:
+            db.session.rollback()
+            msg = str(e)
+            if 'Duplicate entry' in msg:
+                msg = 'Ya existe un tanque con ese nombre.'
+            flash(f'Error: {msg}', 'danger')
+        return redirect(url_for('configurar_tqpf'))
+
+    tanques = TanqueTQPF.query.order_by(TanqueTQPF.nombre_tanque).all()
+    return render_template('admin/tqpf.html', tanques=tanques)
+
+@app.route('/admin/reportes')
+@login_required
+def reportes():
+    """Pantalla de reportes: inventario por silo y embarques por periodo."""
+    # Reporte de inventario por silo
+    silos = Silo.query.order_by(Silo.nombre_silo).all()
+    inventario = []
+    total_gal = Decimal('0')
+    total_cap = Decimal('0')
+    for s in silos:
+        items = InventarioSilo.query.filter_by(id_silo=s.id_silo).all()
+        galones = sum((Decimal(str(it.galones or 0)) for it in items), Decimal('0'))
+        cap = Decimal(str(s.capacidad_gal or 0))
+        pct = (galones / cap * 100) if cap > 0 else Decimal('0')
+        inventario.append({
+            'id_silo': s.id_silo,
+            'nombre': s.nombre_silo,
+            'capacidad_gal': cap,
+            'galones': galones,
+            'ocupacion_pct': pct,
+            'tipo_producto': s.tipo_producto,
+            'estado': s.estado,
+        })
+        total_gal += galones
+        total_cap += cap
+
+    # Reporte de embarques por periodo
+    fecha_desde = _parse_date_or_none(request.args.get('fecha_desde'))
+    fecha_hasta = _parse_date_or_none(request.args.get('fecha_hasta'))
+    id_producto = _parse_int_or_none(request.args.get('id_producto'))
+    id_cliente = _parse_int_or_none(request.args.get('id_cliente'))
+
+    q = Embarque.query
+    if fecha_desde:
+        q = q.filter(Embarque.fecha_embarque >= fecha_desde)
+    if fecha_hasta:
+        q = q.filter(Embarque.fecha_embarque <= fecha_hasta)
+    if id_producto:
+        q = q.filter(Embarque.id_producto == id_producto)
+    if id_cliente:
+        q = q.filter(Embarque.id_cliente == id_cliente)
+    embarques = q.order_by(Embarque.fecha_embarque.desc()).all()
+
+    # Totales de embarques
+    total_embarques_gal = Decimal('0')
+    for e in embarques:
+        total_embarques_gal += sum((Decimal(str(el.cantidad or 0)) for el in e.lotes), Decimal('0'))
+
+    productos = ProductoEmbarque.query.order_by(ProductoEmbarque.descripcion).all()
+    clientes = Cliente.query.order_by(Cliente.nombre_cliente).all()
+
+    return render_template('admin/reportes.html',
+                           inventario=inventario,
+                           total_gal=total_gal,
+                           total_cap=total_cap,
+                           embarques=embarques,
+                           total_embarques_gal=total_embarques_gal,
+                           productos=productos,
+                           clientes=clientes,
+                           filtros={
+                               'fecha_desde': request.args.get('fecha_desde', ''),
+                               'fecha_hasta': request.args.get('fecha_hasta', ''),
+                               'id_producto': id_producto,
+                               'id_cliente': id_cliente,
+                           })
+
+@app.route('/admin/reportes/exportar')
+@login_required
+def exportar_reportes():
+    """Exporta el reporte seleccionado a Excel."""
+    tipo = request.args.get('tipo', 'inventario')
+    if tipo == 'inventario':
+        silos = Silo.query.order_by(Silo.nombre_silo).all()
+        filas = []
+        for s in silos:
+            items = InventarioSilo.query.filter_by(id_silo=s.id_silo).all()
+            galones = sum((Decimal(str(it.galones or 0)) for it in items), Decimal('0'))
+            cap = Decimal(str(s.capacidad_gal or 0))
+            pct = float(galones / cap * 100) if cap > 0 else 0
+            filas.append({
+                'Silo': s.nombre_silo,
+                'Capacidad (gal)': float(cap),
+                'Galones actuales': float(galones),
+                'Ocupación (%)': round(pct, 2),
+                'Tipo producto': s.tipo_producto or '',
+                'Estado': s.estado,
+            })
+        df = pd.DataFrame(filas)
+        nombre = 'reporte_inventario_silos.xlsx'
+    elif tipo == 'embarques':
+        fecha_desde = _parse_date_or_none(request.args.get('fecha_desde'))
+        fecha_hasta = _parse_date_or_none(request.args.get('fecha_hasta'))
+        id_producto = _parse_int_or_none(request.args.get('id_producto'))
+        id_cliente = _parse_int_or_none(request.args.get('id_cliente'))
+        q = Embarque.query
+        if fecha_desde:
+            q = q.filter(Embarque.fecha_embarque >= fecha_desde)
+        if fecha_hasta:
+            q = q.filter(Embarque.fecha_embarque <= fecha_hasta)
+        if id_producto:
+            q = q.filter(Embarque.id_producto == id_producto)
+        if id_cliente:
+            q = q.filter(Embarque.id_cliente == id_cliente)
+        embarques = q.order_by(Embarque.fecha_embarque.desc()).all()
+        filas = []
+        for e in embarques:
+            galones = sum((Decimal(str(el.cantidad or 0)) for el in e.lotes), Decimal('0'))
+            filas.append({
+                'Fecha': e.fecha_embarque,
+                'Cita': e.num_cita,
+                'Producto': (e.producto.descripcion if e.producto else e.producto_texto) or '',
+                'Cliente': (e.cliente.nombre_cliente if e.cliente else e.cliente_texto) or '',
+                'Estatus': e.estatus,
+                'Turno': e.turno,
+                'Galones': float(galones),
+            })
+        df = pd.DataFrame(filas)
+        nombre = 'reporte_embarques.xlsx'
+    else:
+        flash('Tipo de reporte no válido.', 'danger')
+        return redirect(url_for('reportes'))
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Reporte')
+    output.seek(0)
+    return send_file(output, download_name=nombre,
+                     as_attachment=True,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 @app.route('/reproceso', methods=['GET', 'POST'])
 @login_required
@@ -2259,6 +3418,9 @@ def _resolver_unidad_transporte(raw_id, placa_nueva, tipo):
         return nueva.id_unidad, None
     id_int = _parse_int_or_none(raw_id_str)
     if id_int:
+        if not UnidadTransporte.query.filter_by(id_unidad=id_int).first():
+            return None, ('La unidad seleccionada ya no existe. '
+                          'Recarga la página y vuelve a seleccionarla.')
         return id_int, None
     return None, None
 
@@ -2307,6 +3469,9 @@ def _resolver_producto(raw_id, descripcion_nueva, tipo_nuevo, um_nuevo):
         return nuevo.id_producto, None
     id_int = _parse_int_or_none(raw)
     if id_int:
+        if not ProductoEmbarque.query.filter_by(id_producto=id_int).first():
+            return None, ('El producto seleccionado ya no existe. '
+                          'Recarga la página y vuelve a seleccionarlo.')
         return id_int, None
     return None, None
 
@@ -2341,6 +3506,9 @@ def _resolver_cliente(raw_id, nombre_nuevo):
         return nuevo.id_cliente, None
     id_int = _parse_int_or_none(raw)
     if id_int:
+        if not Cliente.query.filter_by(id_cliente=id_int).first():
+            return None, ('El cliente seleccionado ya no existe. '
+                          'Recarga la página y vuelve a seleccionarlo.')
         return id_int, None
     return None, None
 
@@ -2375,6 +3543,9 @@ def _resolver_transportista(raw_id, nombre_nuevo):
         return nuevo.id_transportista, None
     id_int = _parse_int_or_none(raw)
     if id_int:
+        if not Transportista.query.filter_by(id_transportista=id_int).first():
+            return None, ('El transportista seleccionado ya no existe. '
+                          'Recarga la página y vuelve a seleccionarlo.')
         return id_int, None
     return None, None
 
@@ -2406,6 +3577,9 @@ def _resolver_operador(raw_id, nombre_nuevo):
         return nuevo.id_operador, None
     id_int = _parse_int_or_none(raw)
     if id_int:
+        if not Operador.query.filter_by(id_operador=id_int).first():
+            return None, ('El operador seleccionado ya no existe. '
+                          'Recarga la página y vuelve a seleccionarlo.')
         return id_int, None
     return None, None
 
@@ -2524,6 +3698,126 @@ def _validar_embarque_form(datos, lotes_info, tiempos_obj, embarque_actual=None)
             )
 
     return len(errores) == 0, errores
+
+
+def _renumerar_posiciones_silo(id_silo):
+    """Renumera 1..n las posiciones LIFO del inventario de un silo."""
+    items = (InventarioSilo.query.filter_by(id_silo=id_silo)
+             .order_by(InventarioSilo.posicion.asc(),
+                       InventarioSilo.id_inventario.asc()).all())
+    for i, it in enumerate(items, start=1):
+        it.posicion = i
+
+
+def _marca_salida_embarque(id_embarque):
+    """Marca en observaciones que identifica los movimientos de salida de un embarque."""
+    return f'Salida por embarque #{id_embarque}'
+
+
+def _revertir_salida_inventario_embarque(embarque):
+    """
+    Devuelve al inventario los galones descontados por un embarque y elimina los
+    movimientos de salida que se generaron (identificados por la marca del embarque).
+    Se usa al editar o cancelar para recalcular desde cero.
+    """
+    if embarque.id_embarque is None:
+        return
+    marca = _marca_salida_embarque(embarque.id_embarque)
+    movs = (Movimiento.query
+            .filter(Movimiento.tipo_movimiento == 'salida')
+            .filter(Movimiento.observaciones.like(f'{marca}%'))
+            .all())
+    if not movs:
+        return
+    # 1) Desvincular primero embarque_lotes (FK hacia movimientos) para poder
+    #    eliminar los movimientos sin violar la restricción de integridad.
+    EmbarqueLote.query.filter_by(id_embarque=embarque.id_embarque).update(
+        {'id_movimiento': None}, synchronize_session=False)
+    db.session.flush()
+    # 2) Devolver los galones al inventario y eliminar los movimientos de salida.
+    silos_afectados = set()
+    for mv in movs:
+        galones = Decimal(mv.galones or 0)
+        if mv.id_silo is not None and mv.id_lote is not None:
+            item = (InventarioSilo.query
+                    .filter_by(id_silo=mv.id_silo, id_lote=mv.id_lote)
+                    .order_by(InventarioSilo.posicion.asc()).first())
+            if item:
+                item.galones = Decimal(item.galones or 0) + galones
+            else:
+                # El lote se había vaciado del silo: se re-crea la fila al final.
+                max_pos = (db.session.query(
+                    db.func.coalesce(db.func.max(InventarioSilo.posicion), 0))
+                    .filter(InventarioSilo.id_silo == mv.id_silo).scalar()) or 0
+                db.session.add(InventarioSilo(
+                    id_silo=mv.id_silo, id_lote=mv.id_lote,
+                    posicion=int(max_pos) + 1, galones=galones))
+            silos_afectados.add(mv.id_silo)
+        db.session.delete(mv)
+    db.session.flush()
+    for id_silo in silos_afectados:
+        _renumerar_posiciones_silo(id_silo)
+
+
+def _aplicar_salida_inventario_embarque(embarque, lotes_info, id_usuario):
+    """
+    Descuenta del inventario (inventario_silos) los galones declarados por lote en el
+    embarque, en orden LIFO por posición. Crea un Movimiento tipo 'salida' por cada
+    silo afectado y enlaza el primero en embarque_lotes.id_movimiento.
+    Lanza ValueError si algún lote no tiene inventario suficiente.
+    """
+    marca = _marca_salida_embarque(embarque.id_embarque)
+    silos_afectados = set()
+    for id_lote, cantidad, lote_obj in lotes_info:
+        if cantidad is None:
+            continue
+        cantidad = Decimal(cantidad)
+        if cantidad <= 0:
+            continue
+        codigo = lote_obj.codigo_lote if lote_obj else id_lote
+        items = (InventarioSilo.query.filter_by(id_lote=id_lote)
+                 .order_by(InventarioSilo.posicion.asc(),
+                           InventarioSilo.id_inventario.asc()).all())
+        disponible = sum((Decimal(i.galones or 0) for i in items), Decimal('0'))
+        if cantidad > disponible:
+            raise ValueError(
+                f'Inventario insuficiente del lote {codigo}: '
+                f'disponible {disponible} gal, solicitado {cantidad} gal.')
+        restante = cantidad
+        primer_mov = None
+        for item in items:
+            if restante <= 0:
+                break
+            en_lote = Decimal(item.galones or 0)
+            sacar = min(en_lote, restante)
+            if sacar <= 0:
+                continue
+            mv = Movimiento(
+                tipo_movimiento='salida',
+                id_silo=item.id_silo,
+                id_lote=id_lote,
+                galones=sacar,
+                id_usuario=id_usuario,
+                observaciones=(f'{marca} (LIFO Lote {codigo} '
+                               f'- Pos {item.posicion})')
+            )
+            db.session.add(mv)
+            db.session.flush()
+            if primer_mov is None:
+                primer_mov = mv
+            if sacar >= en_lote:
+                db.session.delete(item)
+            else:
+                item.galones = en_lote - sacar
+            silos_afectados.add(item.id_silo)
+            restante -= sacar
+        el = EmbarqueLote.query.filter_by(
+            id_embarque=embarque.id_embarque, id_lote=id_lote).first()
+        if el is not None and primer_mov is not None:
+            el.id_movimiento = primer_mov.id_movimiento
+    db.session.flush()
+    for id_silo in silos_afectados:
+        _renumerar_posiciones_silo(id_silo)
 
 
 def _guardar_embarque_desde_form(embarque, request_form, es_nuevo, id_embarque_actual=None):
@@ -2695,6 +3989,12 @@ def _guardar_embarque_desde_form(embarque, request_form, es_nuevo, id_embarque_a
             lote_obj = Lote.query.get(id_l)
             lotes_info.append((id_l, canti, lote_obj))
 
+        # 5b) Edición: revertir los descuentos de inventario previos del embarque
+        #     para recalcularlos desde cero con la lista de lotes actual.
+        if id_embarque_actual:
+            _revertir_salida_inventario_embarque(embarque)
+            db.session.flush()
+
         # 6) Validar todo antes de guardar
         ok, errores = _validar_embarque_form(datos, lotes_info, tiempos, embarque if not es_nuevo else None)
         if not ok:
@@ -2749,6 +4049,33 @@ def _guardar_embarque_desde_form(embarque, request_form, es_nuevo, id_embarque_a
                 continue
             el = EmbarqueLote(id_embarque=embarque.id_embarque, id_lote=id_lote, cantidad=cantidad)
             db.session.add(el)
+        db.session.flush()
+
+        # 8b) Descontar del inventario los galones declarados por lote
+        #     (crea movimientos de salida y enlaza embarque_lotes.id_movimiento).
+        if embarque.estatus != 'cancelado':
+            try:
+                _aplicar_salida_inventario_embarque(
+                    embarque, lotes_info, current_user.id_usuario)
+            except ValueError as ve:
+                db.session.rollback()
+                flash(str(ve), 'danger')
+                return False, [str(ve)]
+
+        # 8a) Pesos (para cuadre de galonaje)
+        bruto = _parse_decimal_or_none(request_form.get('peso_bruto_kg'))
+        tara = _parse_decimal_or_none(request_form.get('tara_kg'))
+        if bruto is not None or tara is not None:
+            pesos = embarque.pesos or EmbarquePeso()
+            pesos.peso_bruto_kg = bruto
+            pesos.tara_kg = tara
+            pesos.recalcular_neto()
+            pesos.actualizado_por = current_user.id_usuario
+            if not embarque.pesos:
+                embarque.pesos = pesos
+        elif embarque.pesos:
+            # Si se borraron los pesos, eliminar el registro
+            db.session.delete(embarque.pesos)
 
         # 9) Reemplazar sellos
         if id_embarque_actual:
@@ -2879,6 +4206,9 @@ def cancelar_embarque(id_embarque):
     # get_or_404 FUERA del try: así lanza 404 si no existe (coherente con detalle/editar)
     emb = Embarque.query.get_or_404(id_embarque)
     try:
+        if emb.estatus != 'cancelado':
+            # Devolver al inventario los galones que este embarque había descontado.
+            _revertir_salida_inventario_embarque(emb)
         emb.estatus = 'cancelado'
         emb.actualizado_por = current_user.id_usuario
         db.session.commit()
@@ -2898,6 +4228,56 @@ def exportar_embarques():
 
     Usa pandas + openpyxl.
     """
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    def _fmt_fecha(valor):
+        return valor.strftime('%d/%m/%Y') if valor else ''
+
+    def _fmt_fecha_hora(valor):
+        return valor.strftime('%d/%m/%Y %H:%M') if valor else ''
+
+    def _mes_es(valor):
+        if not valor:
+            return ''
+        meses = [
+            'ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO',
+            'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'
+        ]
+        return meses[valor.month - 1]
+
+    def _txt_decimal(valor, decimales=2):
+        if valor is None or valor == '':
+            return ''
+        return f'{float(valor):,.{decimales}f}'
+
+    def _estatus_label(valor):
+        labels = {
+            'programado': 'PROGRAMADO',
+            'en_planta': 'EN PLANTA',
+            'cargado': 'CARGADO',
+            'cancelado': 'CANCELADO',
+        }
+        return labels.get(valor, (valor or '').upper())
+
+    def _sellos_por_tipo(emb, tipo):
+        nums = [s.numero for s in (emb.sellos or []) if s.tipo == tipo and s.numero]
+        return ', '.join(nums)
+
+    def _promedio_lotes(emb, atributo):
+        total = Decimal('0')
+        acumulado = Decimal('0')
+        for el in emb.lotes:
+            if not el.lote or getattr(el.lote, atributo, None) is None:
+                continue
+            cantidad = Decimal(str(el.cantidad or 0))
+            valor = Decimal(str(getattr(el.lote, atributo)))
+            total += cantidad
+            acumulado += cantidad * valor
+        if total > 0:
+            return acumulado / total
+        return None
+
     # Re-aplicar filtros de la URL.
     filtros = {
         'fecha_desde': _parse_date_or_none(request.args.get('fecha_desde')),
@@ -2915,64 +4295,182 @@ def exportar_embarques():
         db.joinedload(Embarque.operador),
         db.joinedload(Embarque.transportista),
         db.joinedload(Embarque.tiempos),
+        db.joinedload(Embarque.detalle).joinedload(EmbarqueDetalle.lavadero),
+        db.joinedload(Embarque.pesos),
+        db.joinedload(Embarque.capturista),
+        db.joinedload(Embarque.facilitador),
+        db.joinedload(Embarque.sellos),
     )
     embarques = q.order_by(Embarque.fecha_embarque.desc()).all()
 
     filas = []
     tu_labels = {
-        'pipa_jumbo': 'Pipa jumbo',
-        'pipa_chica': 'Pipa chica',
-        'isotanque': 'Isotanque',
-        'flexitanque': 'Flexitanque',
-        'caja_refrigerada': 'Caja refrigerada',
-        'caja_seca': 'Caja seca',
-        'trailer': 'Tráiler',
-        'tambores': 'Tambores',
+        'pipa_jumbo': 'PIPA JUMBO',
+        'pipa_chica': 'PIPA CHICA',
+        'isotanque': 'ISOTANQUE',
+        'flexitanque': 'FLEXITANQUE',
+        'caja_refrigerada': 'CAJA REFRIGERADA',
+        'caja_seca': 'CAJA SECA',
+        'trailer': 'TRAILER',
+        'tambores': 'TAMBORES',
     }
+    columnas = [
+        'Fecha de Embarque',
+        'Semana',
+        'Mes',
+        'Estatus',
+        'Fecha de Cita',
+        'Hora de Cita',
+        'Numero de Cita',
+        'Numero de Orden (OV/OT)',
+        'Item',
+        'Descripcion',
+        'Numero de ticket',
+        'Numero de Packing',
+        'Fecha y hora Registro llegada planta',
+        'Fecha y hora de entrada a planta',
+        'Pesado Inicial de la Unidad',
+        'Pesaje de Salida',
+        'Fecha y hora de documentacion',
+        'Fecha y hora de salida de Planta',
+        'Lote',
+        'BRIX',
+        'REL.',
+        'Libras Solidos',
+        'Cantidad Enviada "Gls"',
+        'Cliente/Destino',
+        'Tipo de producto',
+        'Temperatura carga',
+        'Variedad',
+        'CANTIDAD EMBARCADA',
+        'UNIDAD DE MEDIDA',
+        'Numero Economico /Placa Tractor (CAMION)',
+        'Numero Economico/Placa Caja/Tanque/Contenedor,Pipa (REMOLQUE)',
+        'Tipo de Unidad',
+        'Linea Transportista',
+        'Operador',
+        'Sellos de lavado',
+        'Lavadero',
+        'Sello Valvula (salida)',
+        'Sellos Escotilla (salida)',
+        'Sellos puerta trasera (salida)',
+        'Turno',
+        'Capturista',
+        'Facilitador',
+    ]
     for emb in embarques:
-        prod_desc = ''
-        unidad_medida = ''
-        if emb.producto:
-            prod_desc = f'{emb.producto.descripcion} ({emb.producto.item or ""})'.strip()
-            unidad_medida = emb.producto.unidad_medida or ''
-        cliente_txt = ''
+        brix_prom = _promedio_lotes(emb, 'brix')
+        rel_prom = _promedio_lotes(emb, 'relacion')
+        peso_neto = Decimal(str(emb.pesos.peso_neto_kg)) if emb.pesos and emb.pesos.peso_neto_kg is not None else None
+        libras_solidos = None
+        if peso_neto is not None and brix_prom is not None:
+            libras_solidos = peso_neto * brix_prom / Decimal('100')
+
+        cliente_txt = emb.cliente_texto or ''
         if emb.cliente:
-            if emb.cliente.codigo:
-                cliente_txt = f'{emb.cliente.codigo} - {emb.cliente.nombre_cliente}'
-            else:
-                cliente_txt = emb.cliente.nombre_cliente
-        lotes_codigos = '; '.join(
-            f'{el.lote.codigo_lote if el.lote else ""}' for el in emb.lotes)
+            cliente_txt = f'{emb.cliente.codigo} - {emb.cliente.nombre_cliente}' if emb.cliente.codigo else emb.cliente.nombre_cliente
+
+        lotes_codigos = ', '.join(
+            el.lote.codigo_lote for el in emb.lotes if el.lote and el.lote.codigo_lote
+        )
+        variedad = ''
+        if emb.producto:
+            variedad = emb.producto.variedad or emb.producto.descripcion or ''
+
         filas.append({
-            'Fecha': emb.fecha_embarque.strftime('%d/%m/%Y') if emb.fecha_embarque else '',
-            'Cita': emb.num_cita or '',
-            'Orden': emb.num_orden or '',
-            'Ticket': emb.ticket or '',
-            'Packing': emb.packing or '',
-            'Producto': prod_desc,
-            'Cliente': cliente_txt,
-            'Tipo unidad': tu_labels.get(emb.tipo_unidad, emb.tipo_unidad),
-            'Cantidad total': float(emb.cantidad_total),
-            'Unidad': unidad_medida,
-            'Lotes': lotes_codigos,
-            'Estatus': emb.estatus,
-            'Turno': emb.turno,
-            'Tractor': emb.tractor.placa if emb.tractor else '',
-            'Remolque': emb.remolque.placa if emb.remolque else '',
+            'Fecha de Embarque': _fmt_fecha(emb.fecha_embarque),
+            'Semana': emb.fecha_embarque.isocalendar()[1] if emb.fecha_embarque else '',
+            'Mes': _mes_es(emb.fecha_embarque),
+            'Estatus': _estatus_label(emb.estatus),
+            'Fecha de Cita': _fmt_fecha(emb.fecha_embarque),
+            'Hora de Cita': '',
+            'Numero de Cita': emb.num_cita or '',
+            'Numero de Orden (OV/OT)': emb.num_orden or '',
+            'Item': emb.producto.item if emb.producto and emb.producto.item else '',
+            'Descripcion': emb.producto.descripcion if emb.producto and emb.producto.descripcion else (emb.producto_texto or ''),
+            'Numero de ticket': emb.ticket or '',
+            'Numero de Packing': emb.packing or '',
+            'Fecha y hora Registro llegada planta': _fmt_fecha_hora(emb.tiempos.llegada if emb.tiempos else None),
+            'Fecha y hora de entrada a planta': _fmt_fecha_hora(emb.tiempos.entrada if emb.tiempos else None),
+            'Pesado Inicial de la Unidad': _fmt_fecha_hora(emb.tiempos.pesado_inicial if emb.tiempos else None),
+            'Pesaje de Salida': _fmt_fecha_hora(emb.tiempos.pesaje_salida if emb.tiempos else None),
+            'Fecha y hora de documentacion': _fmt_fecha_hora(emb.tiempos.documentacion if emb.tiempos else None),
+            'Fecha y hora de salida de Planta': _fmt_fecha_hora(emb.tiempos.salida if emb.tiempos else None),
+            'Lote': lotes_codigos,
+            'BRIX': _txt_decimal(brix_prom),
+            'REL.': _txt_decimal(rel_prom),
+            'Libras Solidos': _txt_decimal(libras_solidos),
+            'Cantidad Enviada "Gls"': _txt_decimal(emb.cantidad_total),
+            'Cliente/Destino': cliente_txt,
+            'Tipo de producto': emb.producto.tipo.upper() if emb.producto and emb.producto.tipo else '',
+            'Temperatura carga': f'{float(emb.temperatura_c):,.1f}°C' if emb.temperatura_c is not None else '',
+            'Variedad': variedad,
+            'CANTIDAD EMBARCADA': _txt_decimal(peso_neto),
+            'UNIDAD DE MEDIDA': emb.producto.unidad_medida if emb.producto and emb.producto.unidad_medida else '',
+            'Numero Economico /Placa Tractor (CAMION)': emb.tractor.placa if emb.tractor else '',
+            'Numero Economico/Placa Caja/Tanque/Contenedor,Pipa (REMOLQUE)': emb.remolque.placa if emb.remolque else '',
+            'Tipo de Unidad': tu_labels.get(emb.tipo_unidad, (emb.tipo_unidad or '').upper()),
+            'Linea Transportista': emb.transportista.nombre if emb.transportista else '',
             'Operador': emb.operador.nombre if emb.operador else '',
-            'Transportista': emb.transportista.nombre if emb.transportista else '',
-            'T (C)': float(emb.temperatura_c) if emb.temperatura_c else '',
-            'Tiempo en planta': _formatear_timedelta(
-                emb.tiempos.tiempo_en_planta if emb.tiempos else None),
-            'Tiempo documental': _formatear_timedelta(
-                emb.tiempos.tiempo_documental if emb.tiempos else None),
-            'Observaciones': emb.observaciones or '',
+            'Sellos de lavado': _sellos_por_tipo(emb, 'lavado'),
+            'Lavadero': emb.detalle.lavadero.nombre if emb.detalle and emb.detalle.lavadero else '',
+            'Sello Valvula (salida)': _sellos_por_tipo(emb, 'valvula'),
+            'Sellos Escotilla (salida)': _sellos_por_tipo(emb, 'escotilla'),
+            'Sellos puerta trasera (salida)': _sellos_por_tipo(emb, 'puerta_trasera'),
+            'Turno': emb.turno or '',
+            'Capturista': emb.capturista.nombre if emb.capturista else '',
+            'Facilitador': emb.facilitador.nombre if emb.facilitador else '',
         })
 
-    df = pd.DataFrame(filas)
+    df = pd.DataFrame(filas, columns=columnas)
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Embarques')
+        df.to_excel(writer, index=False, sheet_name='Embarques', startrow=1)
+        ws = writer.sheets['Embarques']
+
+        grupos = [
+            ('Datos de plan', 1, 12, '1F4E78'),
+            ('Tiempos de carga', 13, 18, '7F6000'),
+            ('Datos de la carga', 19, 29, '548235'),
+            ('Datos de la unidad', 30, 34, '1F4E78'),
+            ('Carga de Pipa/Isotanque / Caja', 35, 39, '7F6000'),
+            ('Desviacion', 40, 42, '548235'),
+        ]
+
+        fill_header = PatternFill(fill_type='solid', fgColor='0B6B3A')
+        fill_subheader = PatternFill(fill_type='solid', fgColor='0D2F6E')
+        font_white = Font(color='FFFFFF', bold=True)
+        center = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+        for titulo, col_ini, col_fin, color in grupos:
+            ws.merge_cells(start_row=1, start_column=col_ini, end_row=1, end_column=col_fin)
+            celda = ws.cell(row=1, column=col_ini)
+            celda.value = titulo
+            celda.fill = PatternFill(fill_type='solid', fgColor=color)
+            celda.font = font_white
+            celda.alignment = center
+
+        for col_idx in range(1, len(columnas) + 1):
+            celda = ws.cell(row=2, column=col_idx)
+            celda.fill = fill_subheader
+            celda.font = font_white
+            celda.alignment = center
+
+        ws.freeze_panes = 'A3'
+        ws.auto_filter.ref = f'A2:{get_column_letter(len(columnas))}{ws.max_row}'
+        ws.row_dimensions[1].height = 22
+        ws.row_dimensions[2].height = 34
+
+        for fila in ws.iter_rows(min_row=3, max_row=ws.max_row):
+            for celda in fila:
+                celda.alignment = Alignment(vertical='top', wrap_text=True)
+
+        for idx, nombre_col in enumerate(columnas, start=1):
+            largo = len(nombre_col)
+            for celda in ws[get_column_letter(idx)]:
+                if celda.value is not None:
+                    largo = max(largo, len(str(celda.value)))
+            ws.column_dimensions[get_column_letter(idx)].width = min(max(largo + 2, 12), 28)
     output.seek(0)
     return send_file(
         output,
@@ -2986,8 +4484,161 @@ def exportar_embarques():
 @login_required
 def cuadre_embarques():
     """
-    Pantalla de cuadre de galonaje (Fase 5). Por ahora es placeholder."""
-    return render_template('embarques/cuadre.html')
+    Pantalla de cuadre de galonaje.
+    Compara por embarque: galones por peso, galones declarados por lote
+    y galones de inventario (movimientos). Filtros por fecha, producto, cliente.
+    """
+    # --- Filtros ---
+    fecha_desde = _parse_date_or_none(request.args.get('fecha_desde'))
+    fecha_hasta = _parse_date_or_none(request.args.get('fecha_hasta'))
+    id_producto = _parse_int_or_none(request.args.get('id_producto'))
+    id_cliente = _parse_int_or_none(request.args.get('id_cliente'))
+    estado_filtro = (request.args.get('estado') or '').strip() or None
+
+    # Umbral de tolerancia
+    tolerancia_pct = _get_parametro_float('cuadre_tolerancia_pct', 1.0)
+
+    # --- Query ---
+    q = Embarque.query.filter(Embarque.estatus != 'cancelado')
+    if fecha_desde:
+        q = q.filter(Embarque.fecha_embarque >= fecha_desde)
+    if fecha_hasta:
+        q = q.filter(Embarque.fecha_embarque <= fecha_hasta)
+    if id_producto:
+        q = q.filter(Embarque.id_producto == id_producto)
+    if id_cliente:
+        q = q.filter(Embarque.id_cliente == id_cliente)
+
+    q = q.options(
+        db.joinedload(Embarque.lotes).joinedload(EmbarqueLote.lote),
+        db.joinedload(Embarque.lotes).joinedload(EmbarqueLote.movimiento),
+        db.joinedload(Embarque.producto),
+        db.joinedload(Embarque.cliente),
+        db.joinedload(Embarque.pesos),
+    ).order_by(Embarque.fecha_embarque.desc(), Embarque.id_embarque.desc())
+
+    embarques = q.all()
+
+    # --- Calcular cuadre por embarque ---
+    resultados = []
+    for emb in embarques:
+        r = _calcular_cuadre_embarque(emb, tolerancia_pct)
+        if estado_filtro and r['estado'] != estado_filtro:
+            continue
+        resultados.append(r)
+
+    # --- Resumen ---
+    total = len(resultados)
+    por_estado = {}
+    for r in resultados:
+        por_estado[r['estado']] = por_estado.get(r['estado'], 0) + 1
+
+    # --- Catálogos para filtros ---
+    productos = ProductoEmbarque.query.filter_by(activo=True).order_by(ProductoEmbarque.descripcion).all()
+    clientes = Cliente.query.order_by(Cliente.nombre_cliente).all()
+
+    return render_template(
+        'embarques/cuadre.html',
+        resultados=resultados,
+        tolerancia_pct=tolerancia_pct,
+        filtros={
+            'fecha_desde': fecha_desde,
+            'fecha_hasta': fecha_hasta,
+            'id_producto': id_producto,
+            'id_cliente': id_cliente,
+            'estado': estado_filtro,
+        },
+        productos=productos,
+        clientes=clientes,
+        resumen={
+            'total': total,
+            'cuadra': por_estado.get('cuadra', 0),
+            'dentro_tolerancia': por_estado.get('dentro_tolerancia', 0),
+            'descuadre': por_estado.get('descuadre', 0),
+            'sin_datos': por_estado.get('sin_datos', 0),
+        },
+    )
+
+
+@app.route('/embarques/cuadre/exportar')
+@login_required
+def exportar_cuadre():
+    """
+    Exporta a Excel el cuadre de galonaje con los mismos filtros de la pantalla.
+    """
+    fecha_desde = _parse_date_or_none(request.args.get('fecha_desde'))
+    fecha_hasta = _parse_date_or_none(request.args.get('fecha_hasta'))
+    id_producto = _parse_int_or_none(request.args.get('id_producto'))
+    id_cliente = _parse_int_or_none(request.args.get('id_cliente'))
+    estado_filtro = (request.args.get('estado') or '').strip() or None
+    tolerancia_pct = _get_parametro_float('cuadre_tolerancia_pct', 1.0)
+
+    q = Embarque.query.filter(Embarque.estatus != 'cancelado')
+    if fecha_desde:
+        q = q.filter(Embarque.fecha_embarque >= fecha_desde)
+    if fecha_hasta:
+        q = q.filter(Embarque.fecha_embarque <= fecha_hasta)
+    if id_producto:
+        q = q.filter(Embarque.id_producto == id_producto)
+    if id_cliente:
+        q = q.filter(Embarque.id_cliente == id_cliente)
+
+    q = q.options(
+        db.joinedload(Embarque.lotes).joinedload(EmbarqueLote.lote),
+        db.joinedload(Embarque.lotes).joinedload(EmbarqueLote.movimiento),
+        db.joinedload(Embarque.producto),
+        db.joinedload(Embarque.cliente),
+        db.joinedload(Embarque.pesos),
+    ).order_by(Embarque.fecha_embarque.desc())
+
+    resultados = []
+    for emb in q.all():
+        r = _calcular_cuadre_embarque(emb, tolerancia_pct)
+        if estado_filtro and r['estado'] != estado_filtro:
+            continue
+        resultados.append(r)
+
+    estado_labels = {
+        'cuadra': 'Cuadra',
+        'dentro_tolerancia': 'Dentro de tolerancia',
+        'descuadre': 'Descuadre',
+        'sin_datos': 'Sin datos',
+    }
+
+    filas = []
+    for r in resultados:
+        emb = r['embarque']
+        prod_desc = emb.producto.descripcion if emb.producto else ''
+        cliente_nombre = emb.cliente.nombre_cliente if emb.cliente else ''
+        filas.append({
+            'Fecha': emb.fecha_embarque.strftime('%d/%m/%Y') if emb.fecha_embarque else '',
+            'Cita': emb.num_cita or '',
+            'Producto': prod_desc,
+            'Cliente': cliente_nombre,
+            'Brix promedio': round(r['brix_promedio'], 2) if r['brix_promedio'] is not None else '',
+            'Densidad (kg/L)': round(r['densidad'], 5) if r['densidad'] is not None else '',
+            'Peso neto (kg)': round(r['peso_neto'], 2) if r['peso_neto'] is not None else '',
+            'Galones por peso': round(r['galones_peso'], 2) if r['galones_peso'] is not None else '',
+            'Galones por lote': round(r['galones_lotes'], 2),
+            'Galones inventario': round(r['galones_inventario'], 2) if r['galones_inventario'] is not None else '',
+            'Dif. peso vs lote (gal)': round(r['dif_peso_lotes_abs'], 2) if r['dif_peso_lotes_abs'] is not None else '',
+            'Dif. peso vs lote (%)': round(r['dif_peso_lotes'], 2) if r['dif_peso_lotes'] is not None else '',
+            'Dif. inventario vs lote (gal)': round(r['dif_lotes_abs'], 2) if r['dif_lotes_abs'] is not None else '',
+            'Dif. inventario vs lote (%)': round(r['dif_inv_lotes'], 2) if r['dif_inv_lotes'] is not None else '',
+            'Estado': estado_labels.get(r['estado'], r['estado']),
+        })
+
+    df = pd.DataFrame(filas)
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Cuadre')
+    output.seek(0)
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=f'cuadre_galonaje_{datetime.now().strftime("%Y%m%d_%H%M")}.xlsx',
+    )
 
 
 # =====================================================================

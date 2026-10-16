@@ -7,9 +7,12 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% if current_user.is_authenticated %}
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    {% endif %}
     {% block extra_css %}{% endblock %}
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
     {% if current_user.is_authenticated %}
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
         <div class="container-fluid">
@@ -32,6 +35,9 @@
                         <a class="nav-link" href="{{ url_for('empaque_resumen') }}">Material de empaque</a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('inventario_tqpf') }}">Inventario TQPF</a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('historial') }}">Historial</a>
                     </li>
                     {% if current_user.rol == 'administrador' %}
@@ -42,9 +48,10 @@
                         <ul class="dropdown-menu">
                             <li><a class="dropdown-item" href="{{ url_for('gestionar_usuarios') }}">Usuarios</a></li>
                             <li><a class="dropdown-item" href="{{ url_for('gestionar_catalogo', nombre='productos_embarque') }}">Catálogos de embarques</a></li>
-                            <li><a class="dropdown-item" href="#">Configuración Silos</a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('configurar_silos') }}">Configuración Silos</a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('configurar_tqpf') }}">Configuración TQPF</a></li>
                             <li><hr class="dropdown-divider"></li>
-                            <li><a class="dropdown-item" href="#">Reportes</a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('reportes') }}">Reportes</a></li>
                         </ul>
                     </li>
                     {% endif %}
@@ -55,6 +62,40 @@
                     <span class="nav-item nav-link text-light me-3">
                         <i class="bi bi-person-circle"></i> {{ display_name }}{% if display_role %} - {{ display_role|capitalize }}{% endif %}
                     </span>
+
+                    <!-- Campana de notificaciones -->
+                    <li class="nav-item dropdown me-2">
+                        <a class="nav-link position-relative" href="#" id="notifBell" role="button"
+                           data-bs-toggle="dropdown" aria-expanded="false" title="Notificaciones">
+                            <i class="bi bi-bell fs-5"></i>
+                            <span id="notifBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger
+                                  {% if notificaciones_no_leidas == 0 %}d-none{% endif %}"
+                                  style="font-size:0.65rem;">{{ notificaciones_no_leidas }}</span>
+                        </a>
+                        <div class="dropdown-menu dropdown-menu-end p-0 shadow" style="width:22rem; max-height:70vh; overflow-y:auto;">
+                            <div class="d-flex justify-content-between align-items-center p-2 border-bottom bg-light">
+                                <span class="fw-semibold small">Notificaciones</span>
+                                <form action="{{ url_for('notificacion_leer_todas') }}" method="post" id="formLeerTodas" class="m-0">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-link btn-sm p-0 text-decoration-none">Marcar todas como leídas</button>
+                                </form>
+                            </div>
+                            <div id="notifList">
+                                {% if notificaciones_no_leidas == 0 %}
+                                <div class="text-center text-muted small py-4">No tienes notificaciones pendientes.</div>
+                                {% else %}
+                                <div class="text-center text-muted small py-3">Cargando…</div>
+                                {% endif %}
+                            </div>
+                            <div class="d-grid border-top">
+                                <a class="dropdown-item text-center small fw-semibold" href="{{ url_for('notificaciones') }}">Ver todas</a>
+                            </div>
+                        </div>
+                    </li>
+
+                    <a class="nav-link btn btn-outline-light btn-sm" href="{{ url_for('cambiar_password') }}">
+                        <i class="bi bi-key"></i> Contraseña
+                    </a>
                     <a class="nav-link btn btn-outline-danger btn-sm" href="{{ url_for('logout') }}">Cerrar Sesión</a>
                 </div>
             </div>
@@ -62,7 +103,7 @@
     </nav>
     {% endif %}
 
-    <div class="container mt-4">
+    <div class="{% block page_wrapper_class %}container mt-4{% endblock %}">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
@@ -80,6 +121,114 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    {% if current_user.is_authenticated %}
+    <script>
+    (function () {
+        const API_URL = "{{ url_for('api_notificaciones') }}";
+        const LEER_TODAS_URL = "{{ url_for('notificacion_leer_todas') }}";
+        const badge = document.getElementById('notifBadge');
+        const list = document.getElementById('notifList');
+        const bell = document.getElementById('notifBell');
+        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
+        function postOptions() {
+            return {
+                method: 'POST',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRFToken': csrfToken
+                }
+            };
+        }
+
+        function actualizarBadge(n) {
+            if (!badge) return;
+            badge.textContent = n > 99 ? '99+' : n;
+            if (n > 0) badge.classList.remove('d-none');
+            else badge.classList.add('d-none');
+        }
+
+        function escapeHtml(s) {
+            const d = document.createElement('div');
+            d.textContent = s == null ? '' : String(s);
+            return d.innerHTML;
+        }
+
+        function renderNotif(n) {
+            const url = n.url && n.url !== '#' ? n.url : '#';
+            const unread = n.leida ? '' : 'fw-semibold bg-light';
+            const flecha = url !== '#' ? '<i class="bi bi-chevron-right text-muted"></i>' : '';
+            return `<a href="${escapeHtml(url)}" class="dropdown-item ${unread} py-2"
+                       data-id="${n.id}" style="white-space:normal;">
+                <div class="d-flex justify-content-between align-items-start gap-2">
+                    <div class="flex-grow-1">
+                        <div class="small">${escapeHtml(n.titulo)}</div>
+                        <div class="text-muted" style="font-size:0.75rem;line-height:1.3;">${escapeHtml(n.mensaje)}</div>
+                        <div class="text-muted" style="font-size:0.65rem;">${escapeHtml(n.creada_en)}</div>
+                    </div>
+                    ${flecha}
+                </div>
+            </a>`;
+        }
+
+        function cargarNotificaciones() {
+            if (!list) return;
+            list.innerHTML = '<div class="text-center text-muted small py-3">Cargando…</div>';
+            fetch(API_URL, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+                .then(r => r.json())
+                .then(data => {
+                    actualizarBadge(data.no_leidas || 0);
+                    const notifs = data.notificaciones || [];
+                    if (notifs.length === 0) {
+                        list.innerHTML = '<div class="text-center text-muted small py-4">No tienes notificaciones.</div>';
+                        return;
+                    }
+                    list.innerHTML = notifs.map(renderNotif).join('');
+                    // Marcar como leída al hacer clic
+                    list.querySelectorAll('a[data-id]').forEach(a => {
+                        a.addEventListener('click', function (e) {
+                            const id = this.dataset.id;
+                            fetch(`/notificaciones/${id}/leer`, postOptions())
+                                .then(r => r.json()).then(d => actualizarBadge(d.no_leidas || 0)).catch(() => {});
+                        });
+                    });
+                })
+                .catch(() => {
+                    list.innerHTML = '<div class="text-center text-danger small py-3">Error al cargar notificaciones.</div>';
+                });
+        }
+
+        // Cargar cuando se abre el dropdown
+        if (bell) {
+            bell.addEventListener('click', function () {
+                // Solo cargar si el dropdown se está abriendo (Bootstrap lo maneja)
+                setTimeout(cargarNotificaciones, 50);
+            });
+        }
+
+        // Marcar todas como leídas vía AJAX
+        const formTodas = document.getElementById('formLeerTodas');
+        if (formTodas) {
+            formTodas.addEventListener('submit', function (e) {
+                e.preventDefault();
+                fetch(LEER_TODAS_URL, postOptions())
+                    .then(r => r.json()).then(() => {
+                        actualizarBadge(0);
+                        if (list) list.querySelectorAll('a').forEach(a => a.classList.remove('fw-semibold', 'bg-light'));
+                    }).catch(() => {});
+            });
+        }
+
+        // Polling cada 60 segundos para actualizar el contador
+        setInterval(function () {
+            fetch(API_URL, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+                .then(r => r.json())
+                .then(data => actualizarBadge(data.no_leidas || 0))
+                .catch(() => {});
+        }, 60000);
+    })();
+    </script>
+    {% endif %}
     {% block extra_js %}{% endblock %}
 </body>
 </html>

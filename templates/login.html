@@ -1,44 +1,201 @@
 {% extends "base.html" %}
 
 {% block title %}Iniciar Sesión{% endblock %}
+{% block body_class %}login-body{% endblock %}
+{% block page_wrapper_class %}container-fluid p-0{% endblock %}
+
+{% block extra_css %}
+<style>
+    .login-body {
+        background: #eef1ec;
+    }
+
+    .login-hero {
+        min-height: 100vh;
+        display: flex;
+        overflow: hidden;
+    }
+
+    .login-panel {
+        width: min(38%, 560px);
+        min-width: 360px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.97), rgba(245,247,243,0.96));
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        z-index: 2;
+        padding: 3rem 2rem;
+        border-top-right-radius: 180px;
+        border-bottom-right-radius: 180px;
+        box-shadow: 20px 0 40px rgba(0, 0, 0, 0.08);
+    }
+
+    .login-panel::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        right: -120px;
+        width: 240px;
+        height: 100%;
+        background: inherit;
+        border-radius: 50%;
+        z-index: -1;
+    }
+
+    .login-panel-inner {
+        width: 100%;
+        max-width: 430px;
+    }
+
+    .login-brand {
+        text-align: center;
+        margin-bottom: 1.75rem;
+    }
+
+    .login-brand img {
+        max-width: 230px;
+        width: 100%;
+        height: auto;
+    }
+
+    .login-subtitle {
+        color: #26b6e6;
+        font-size: 2rem;
+        font-weight: 300;
+        text-align: center;
+        margin-bottom: 1rem;
+    }
+
+    .login-card {
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+    }
+
+    .login-card .form-label {
+        color: var(--brand-green);
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin-bottom: 0.35rem;
+    }
+
+    .login-card .form-control {
+        border: 2px solid rgba(11, 107, 58, 0.35);
+        border-radius: 0.5rem;
+        padding: 0.8rem 0.95rem;
+    }
+
+    .login-card .form-control:focus {
+        border-color: var(--brand-green);
+        box-shadow: 0 0 0 0.2rem rgba(11, 107, 58, 0.12);
+    }
+
+    .login-submit {
+        min-width: 210px;
+        padding: 0.85rem 1.25rem;
+        font-size: 1.15rem;
+        font-weight: 600;
+        border-radius: 0.5rem;
+        box-shadow: 0 10px 24px rgba(11, 107, 58, 0.18);
+    }
+
+    .login-divider {
+        border: 0;
+        border-top: 2px solid rgba(0, 0, 0, 0.08);
+        margin: 1.25rem 0 0.9rem;
+    }
+
+    .login-help {
+        text-align: center;
+        color: #5f6c68;
+    }
+
+    .login-help a {
+        color: #26b6e6;
+        text-decoration: none;
+        font-weight: 600;
+    }
+
+    .login-image {
+        flex: 1;
+        background:
+            linear-gradient(rgba(0, 0, 0, 0.03), rgba(0, 0, 0, 0.03)),
+            url("{{ url_for('static', filename='img/Fondo.png') }}") center center / cover no-repeat;
+    }
+
+    @media (max-width: 991.98px) {
+        .login-hero {
+            min-height: auto;
+            flex-direction: column;
+        }
+
+        .login-panel {
+            width: 100%;
+            min-width: 0;
+            border-radius: 0;
+            box-shadow: none;
+        }
+
+        .login-panel::after {
+            display: none;
+        }
+
+        .login-image {
+            min-height: 320px;
+        }
+    }
+</style>
+{% endblock %}
 
 {% block content %}
-<div class="row justify-content-center mt-5">
-    <div class="col-md-4">
-        <div class="card shadow">
-            <div class="card-header bg-primary text-white text-center">
-                <div class="d-flex justify-content-center mb-2">
-                    <img src="{{ url_for('static', filename='img/citrofrut-logo.png') }}" alt="Citrofrut" height="42">
-                </div>
-                <h3 class="mb-0">SICSE</h3>
-                <div class="small">Sistema Integral de Control de Silos y Embarques</div>
+<div class="login-hero">
+    <section class="login-panel">
+        <div class="login-panel-inner">
+            <div class="login-brand">
+                <img src="{{ url_for('static', filename='img/citrofrut-logo.png') }}" alt="Citrofrut">
             </div>
-            <div class="card-body">
-                <form method="POST">
+
+            <h1 class="login-subtitle">Inicio de sesión</h1>
+
+            <div class="login-card">
+                <div class="d-grid mb-3">
+                    <button type="submit" form="loginForm" class="btn btn-primary login-submit mx-auto">
+                        <i class="bi bi-box-arrow-in-right me-2"></i>Iniciar Sesión
+                    </button>
+                </div>
+
+                <hr class="login-divider">
+
+                <p class="login-help mb-3">
+                    Ingrese con el usuario y la contraseña proporcionados por el administrador del sistema.
+                </p>
+
+                <form method="POST" id="loginForm">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <div class="mb-3">
                         <label for="usuario" class="form-label">Usuario</label>
-                        <div class="input-group">
-                            <span class="input-group-text"><i class="bi bi-person"></i></span>
-                            <input type="text" class="form-control" id="usuario" name="usuario" required autofocus>
-                        </div>
+                        <input type="text" class="form-control" id="usuario" name="usuario" required autofocus>
                     </div>
                     <div class="mb-3">
                         <label for="password" class="form-label">Contraseña</label>
-                        <div class="input-group">
-                            <span class="input-group-text"><i class="bi bi-lock"></i></span>
-                            <input type="password" class="form-control" id="password" name="password" required>
-                        </div>
+                        <input type="password" class="form-control" id="password" name="password" required>
                     </div>
-                    <div class="d-grid gap-2">
-                        <button type="submit" class="btn btn-primary">Iniciar Sesión</button>
+                    <div class="d-grid mt-4">
+                        <button type="submit" class="btn btn-primary">Entrar</button>
                     </div>
                 </form>
-            </div>
-            <div class="card-footer text-muted text-center">
-                <small>&copy; 2026 Citrofrut</small>
+
+                <div class="login-help mt-4">
+                    <div class="fs-5 mb-1">¿Olvidó su contraseña?</div>
+                    <div>
+                        Contacte al administrador para el restablecimiento de acceso.
+                    </div>
+                </div>
             </div>
         </div>
-    </div>
+    </section>
+
+    <section class="login-image" aria-hidden="true"></section>
 </div>
 {% endblock %}

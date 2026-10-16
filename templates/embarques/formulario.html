@@ -479,6 +479,36 @@
                         </div>
                     </fieldset>
 
+                    {# Pesos (para cuadre de galonaje) #}
+                    <fieldset class="mb-4">
+                        <legend class="fs-6 fw-semibold text-dark border-bottom pb-1 mb-3">
+                            <i class="bi bi-bag me-1"></i>Pesos (cuadre de galonaje)
+                        </legend>
+                        <div class="row g-3">
+                            <div class="col-md-4">
+                                <label class="form-label" for="peso_bruto_kg">Peso bruto (kg)</label>
+                                <input type="number" step="0.01" min="0" id="peso_bruto_kg" name="peso_bruto_kg" class="form-control"
+                                    placeholder="Peso total de la unidad cargada"
+                                    oninput="calcularPesoNeto()"
+                                    value="{% if embarque and embarque.pesos and embarque.pesos.peso_bruto_kg %}{{ embarque.pesos.peso_bruto_kg }}{% endif %}">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label" for="tara_kg">Tara (kg)</label>
+                                <input type="number" step="0.01" min="0" id="tara_kg" name="tara_kg" class="form-control"
+                                    placeholder="Peso de la unidad vacía"
+                                    oninput="calcularPesoNeto()"
+                                    value="{% if embarque and embarque.pesos and embarque.pesos.tara_kg %}{{ embarque.pesos.tara_kg }}{% endif %}">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label" for="peso_neto_calc">Peso neto (kg)</label>
+                                <input type="text" id="peso_neto_calc" class="form-control bg-light" readonly
+                                    placeholder="Se calcula: bruto − tara"
+                                    value="{% if embarque and embarque.pesos and embarque.pesos.peso_neto_kg %}{{ embarque.pesos.peso_neto_kg }}{% endif %}">
+                                <div class="form-text">Se calcula automáticamente como bruto − tara.</div>
+                            </div>
+                        </div>
+                    </fieldset>
+
                     {# Observaciones #}
                     <fieldset class="mb-4">
                         <label class="form-label" for="observaciones">Observaciones</label>
@@ -674,6 +704,22 @@ function calcularTiemposCalc() {
     const elTd = document.getElementById('calc-tdoc');
     if (elTd) elTd.textContent = fmt(salida && doc ? (salida - doc) : 0);
 }
+
+// ==========================================================================
+// Cálculo de peso neto (bruto - tara) para el cuadre de galonaje
+// ==========================================================================
+function calcularPesoNeto() {
+    const bruto = parseFloat(document.getElementById('peso_bruto_kg').value);
+    const tara = parseFloat(document.getElementById('tara_kg').value);
+    const netoEl = document.getElementById('peso_neto_calc');
+    if (!isNaN(bruto) && !isNaN(tara)) {
+        netoEl.value = (bruto - tara).toFixed(2);
+    } else {
+        netoEl.value = '';
+    }
+}
+// Calcular al cargar la página si hay valores
+window.addEventListener('load', calcularPesoNeto);
 
 // ==========================================================================
 // Validación del formulario (duplicidad sello / errores por campo
