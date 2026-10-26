@@ -44,7 +44,7 @@
                         </div>
                         <div class="col-md-4">
                             <label class="form-label small text-muted mb-1">Tiempo en planta</label>
-                            <div id="calc-tplanta" class="form-control-plaintext fw-semibold">-</div>
+                            <div class="calc-tplanta form-control-plaintext fw-semibold">-</div>
                         </div>
                     </div>
 
@@ -198,6 +198,19 @@
                                 </select>
                                 <div class="invalid-feedback">Elige un tipo de unidad.</div>
                             </div>
+                            <div class="col-md-4">
+                                <label class="form-label" for="id_silo">Silo de origen</label>
+                                <select class="form-select" id="id_silo" name="id_silo">
+                                    <option value="">Ninguno</option>
+                                    {% for s in catalogos.silos %}
+                                    <option value="{{ s.id_silo }}"
+                                        {% if embarque and embarque.id_silo == s.id_silo %}selected{% endif %}>
+                                        {{ s.nombre_silo }}{% if s.tipo_producto %} ({{ s.tipo_producto }}){% endif %}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                                <div class="form-text">Un solo silo por embarque.</div>
+                            </div>
                         </div>
 
                         {# Repetidor de lotes #}
@@ -232,6 +245,43 @@
                             </div>
                             <div id="alert-lotes" class="form-text text-danger d-none">
                                 Agrega al menos un lote con cantidad mayor a 0.
+                            </div>
+                        </div>
+
+                        {# Lote de mezcla (solo pipas): el código lo asigna INVOCA #}
+                        <div id="box-lote-mezcla" class="mt-4 d-none">
+                            <div class="p-3 border rounded bg-light">
+                                <label class="form-label fw-semibold" for="lote_mezcla">
+                                    <i class="bi bi-shuffle me-1"></i>Lote de mezcla (asignado por INVOCA)
+                                </label>
+                                <div class="row g-2">
+                                    <div class="col-md-4">
+                                        <input type="text" class="form-control" id="lote_mezcla" name="lote_mezcla"
+                                               pattern="\d{3}-\d{8}-\d{6}" placeholder="005-20251210-044497"
+                                               value="{% if embarque and embarque.lote_mezcla %}{{ embarque.lote_mezcla.codigo_lote }}{% endif %}">
+                                        <div class="form-text">Formato: 005-AAAAMMDD-NNNNNN. Obligatorio para pipas.</div>
+                                    </div>
+                                    <div class="col-md-2">
+                                        <input type="number" step="0.01" class="form-control" id="lote_mezcla_brix" name="lote_mezcla_brix"
+                                               placeholder="°Brix"
+                                               value="{% if embarque and embarque.lote_mezcla and embarque.lote_mezcla.brix is not none %}{{ embarque.lote_mezcla.brix }}{% endif %}">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <input type="number" step="0.01" class="form-control" id="lote_mezcla_relacion" name="lote_mezcla_relacion"
+                                               placeholder="Relación"
+                                               value="{% if embarque and embarque.lote_mezcla and embarque.lote_mezcla.relacion is not none %}{{ embarque.lote_mezcla.relacion }}{% endif %}">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <input type="number" step="0.01" class="form-control" id="lote_mezcla_pulpa" name="lote_mezcla_pulpa"
+                                               placeholder="% Pulpa"
+                                               value="{% if embarque and embarque.lote_mezcla and embarque.lote_mezcla.pulpa is not none %}{{ embarque.lote_mezcla.pulpa }}{% endif %}">
+                                    </div>
+                                </div>
+                                <small class="text-muted">
+                                    Los lotes de origen son los de la tabla de arriba; aquí solo se captura el
+                                    código del lote de mezcla. Si dejas Brix/relación/pulpa en blanco se calculan
+                                    ponderados por galones.
+                                </small>
                             </div>
                         </div>
                     </fieldset>
@@ -472,7 +522,7 @@
                         <div class="row g-3 mt-2">
                             <div class="col-md-6 small">
                                 <span class="text-muted">Tiempo en planta:</span>
-                                <span id="calc-tplanta" class="fw-semibold">-</span>
+                                <span class="calc-tplanta fw-semibold">-</span>
                                 <span class="text-muted ms-4">Tiempo documental:</span>
                                 <span id="calc-tdoc" class="fw-semibold">-</span>
                             </div>
@@ -588,6 +638,7 @@ const grupos = {
     tambor: document.getElementById('grupo-tambor'),
 };
 const msgSinGrupo = document.getElementById('sin-grupo');
+const boxLoteMezcla = document.getElementById('box-lote-mezcla');
 
 function actualizarGrupoDetalle(val) {
     const opcion = selTU.selectedOptions[0];
@@ -598,6 +649,11 @@ function actualizarGrupoDetalle(val) {
         msgSinGrupo.classList.add('d-none');
     } else {
         msgSinGrupo.classList.remove('d-none');
+    }
+    // El lote de mezcla (INVOCA) solo aplica a pipas.
+    if (boxLoteMezcla) {
+        if (grupo === 'pipa') boxLoteMezcla.classList.remove('d-none');
+        else boxLoteMezcla.classList.add('d-none');
     }
 }
 if (selTU) {
@@ -699,12 +755,18 @@ function calcularTiemposCalc() {
         const m = Math.round((ms % 3600000) / 60000);
         return h + ' h ' + m + ' min';
     };
-    const elTp = document.getElementById('calc-tplanta');
-    if (elTp) elTp.textContent = fmt(salida && entrada ? (salida - entrada) : 0);
+    // Tiempo en planta: se cuenta desde la ENTRADA a planta hasta la SALIDA de
+    // planta. Se pinta en todos los elementos .calc-tplanta (resumen superior y
+    // bloque de Tiempos).
+    const txtTp = fmt(salida && entrada ? (salida - entrada) : 0);
+    document.querySelectorAll('.calc-tplanta').forEach(el => { el.textContent = txtTp; });
     const elTd = document.getElementById('calc-tdoc');
     if (elTd) elTd.textContent = fmt(salida && doc ? (salida - doc) : 0);
 }
 
+// Inicializa los indicadores de tiempo al cargar la página (modo edición con
+// tiempos ya capturados); sólo se recalculan al cambiar un campo de fecha/hora.
+calcularTiemposCalc();
 // ==========================================================================
 // Cálculo de peso neto (bruto - tara) para el cuadre de galonaje
 // ==========================================================================

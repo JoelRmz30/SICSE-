@@ -1,15 +1,20 @@
 {# ==========================================================================
    Inventario de Tanques de Proceso (TQPF).
-   Muestra el contenido de cada tanque (lote, Brix y galones), el total y el
-   porcentaje de ocupación. Permite registrar la entrada de un lote y vaciar
-   un lote del tanque. Es un inventario independiente del de silos.
+
+   Flujo real: los lotes se asignan PRIMERO al tanque de pared fría (TQPF) y
+   de ahí se traspasan al silo. Esta pantalla muestra el contenido de cada
+   tanque (lote, Brix y galones), el total y el porcentaje de ocupación.
+   Permite:
+     1. Registrar la entrada de un lote (se crea o se reutiliza el lote).
+     2. Traspasar un lote (total o parcial) hacia un silo.
+     3. Vaciar un lote del tanque.
    ========================================================================== #}
 {% extends "base.html" %}
 {% block title %}Inventario TQPF{% endblock %}
 
 {% block content %}
 <div class="row justify-content-center">
-    <div class="col-xl-10 col-lg-11">
+    <div class="col-xl-11 col-lg-12">
 
         {# Encabezado #}
         <div class="card shadow mb-4">
@@ -24,11 +29,13 @@
             <div class="card-body pt-3">
                 <p class="text-muted small mb-0">
                     Tanques de proceso donde el producto permanece antes de pasar a los silos.
+                    El lote se asigna aquí primero y después se traspasa al silo correspondiente.
                 </p>
             </div>
         </div>
 
         {# Formulario para registrar la entrada de un lote a un tanque #}
+        {% if current_user.rol != 'invitado' %}
         <div class="card shadow mb-4">
             <div class="card-header bg-light fw-semibold">
                 <i class="bi bi-box-arrow-in-down me-1"></i>Registrar entrada de lote
@@ -37,6 +44,7 @@
                 <form method="POST" class="row g-3" novalidate>
                     <input type="hidden" name="accion" value="entrada">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
                     <div class="col-md-4">
                         <label class="form-label" for="f-id_tanque">Tanque <span class="text-danger">*</span></label>
                         <select class="form-select" id="f-id_tanque" name="id_tanque" required>
@@ -49,28 +57,66 @@
                         </select>
                     </div>
                     <div class="col-md-4">
-                        <label class="form-label" for="f-id_lote">Lote <span class="text-danger">*</span></label>
-                        <select class="form-select" id="f-id_lote" name="id_lote" required>
-                            <option value="">Selecciona un lote…</option>
-                            {% for l in lotes %}
-                            <option value="{{ l.id_lote }}" data-brix="{{ l.brix if l.brix is not none else '' }}">
-                                {{ l.codigo_lote }}{% if l.brix is not none %} · Brix {{ l.brix }}{% endif %}
-                            </option>
-                            {% endfor %}
-                        </select>
+                        <label class="form-label" for="f-codigo_lote">Código de lote <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="f-codigo_lote" name="codigo_lote"
+                               placeholder="005-20251210-044497" required
+                               pattern="\d{3}-\d{8}-\d{6}">
+                        <div class="form-text">Formato: 005-AAAAMMDD-NNNNNN</div>
                     </div>
                     <div class="col-md-2">
                         <label class="form-label" for="f-galones">Galones <span class="text-danger">*</span></label>
                         <input type="number" step="0.01" min="0" class="form-control" id="f-galones" name="galones" required>
                     </div>
-                    <div class="col-md-2 d-flex align-items-end">
-                        <button type="submit" class="btn btn-primary w-100">
-                            <i class="bi bi-plus-lg me-1"></i>Agregar
+                    <div class="col-md-2">
+                        <label class="form-label" for="f-fecha_lote">Fecha</label>
+                        <input type="date" class="form-control" id="f-fecha_lote" name="fecha_lote">
+                    </div>
+
+                    <div class="col-md-3">
+                        <label class="form-label" for="f-brix">°Brix</label>
+                        <input type="number" step="0.01" class="form-control" id="f-brix" name="brix">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="f-relacion">Relación</label>
+                        <input type="number" step="0.01" class="form-control" id="f-relacion" name="relacion">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="f-pulpa">% Pulpa</label>
+                        <input type="number" step="0.01" class="form-control" id="f-pulpa" name="pulpa">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="f-id_estado">Estado</label>
+                        <select class="form-select" id="f-id_estado" name="id_estado">
+                            <option value="">Sin estado…</option>
+                            {% for e in estados %}
+                            <option value="{{ e.id_estado }}">{{ e.nombre_estado }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="f-id_cliente">Cliente</label>
+                        <select class="form-select" id="f-id_cliente" name="id_cliente">
+                            <option value="">Sin cliente…</option>
+                            {% for c in clientes %}
+                            <option value="{{ c.id_cliente }}">{{ c.nombre_cliente }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="f-cliente_manual">Cliente (texto libre)</label>
+                        <input type="text" class="form-control" id="f-cliente_manual" name="cliente_manual"
+                               placeholder="Se usa si el cliente no está en el catálogo">
+                    </div>
+
+                    <div class="col-12 d-flex justify-content-end">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-plus-lg me-1"></i>Registrar entrada
                         </button>
                     </div>
                 </form>
             </div>
         </div>
+        {% endif %}
 
         {# Tanques con su inventario #}
         {% for t in tanques %}
@@ -92,12 +138,12 @@
                     <table class="table table-sm table-hover align-middle mb-0">
                         <thead class="table-light small text-muted">
                             <tr>
-                                <th style="width:8%">Pos.</th>
+                                <th style="width:7%">Pos.</th>
                                 <th>Lote</th>
                                 <th>Brix</th>
                                 <th class="text-end">Galones</th>
                                 <th>Registrado</th>
-                                <th style="width:15%" class="text-end">Acciones</th>
+                                <th style="width:22%" class="text-end">Acciones</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -111,6 +157,16 @@
                                     {{ it.fecha_registro.strftime('%d/%m/%Y %H:%M') if it.fecha_registro else '-' }}
                                 </td>
                                 <td class="text-end">
+                                    {% if current_user.rol != 'invitado' %}
+                                    <button type="button" class="btn btn-sm btn-outline-primary btn-traspaso"
+                                            data-bs-toggle="modal" data-bs-target="#modalTraspaso"
+                                            data-id="{{ it.id_inventario_tqpf }}"
+                                            data-tanque="{{ t.nombre_tanque }}"
+                                            data-lote="{{ it.lote.codigo_lote if it.lote else it.id_lote }}"
+                                            data-galones="{{ it.galones }}">
+                                        <i class="bi bi-arrow-right-circle me-1"></i>Traspasar
+                                    </button>
+                                    {% endif %}
                                     <form method="POST" class="d-inline"
                                           onsubmit="return confirm('¿Vaciar este lote del tanque {{ t.nombre_tanque }}?');">
                                         <input type="hidden" name="accion" value="vaciar">
@@ -145,4 +201,86 @@
 
     </div>
 </div>
+
+{# Modal compartido para traspasar un lote del tanque a un silo #}
+{% if current_user.rol != 'invitado' %}
+<div class="modal fade" id="modalTraspaso" tabindex="-1" aria-labelledby="modalTraspasoLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="POST" action="{{ url_for('traspasar_tqpf_silo') }}" class="modal-content">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="id_inventario_tqpf" id="tr-id_inventario_tqpf">
+            <div class="modal-header">
+                <h5 class="modal-title" id="modalTraspasoLabel">
+                    <i class="bi bi-arrow-right-circle me-1"></i>Traspasar a silo
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+            </div>
+            <div class="modal-body">
+                <p class="small text-muted mb-3">
+                    Tanque <strong id="tr-tanque">-</strong> ·
+                    Lote <strong id="tr-lote">-</strong> ·
+                    Disponible <strong id="tr-disponible">-</strong> gal
+                </p>
+                <div class="mb-3">
+                    <label class="form-label" for="tr-id_silo">Silo destino <span class="text-danger">*</span></label>
+                    <select class="form-select" id="tr-id_silo" name="id_silo" required>
+                        <option value="">Selecciona un silo…</option>
+                        {% for s in silos %}
+                        <option value="{{ s.id_silo }}">
+                            {{ s.nombre_silo }}
+                            {%- if s.tipo_permitido %} ({{ s.tipo_permitido }}){% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label" for="tr-tipo_producto">Tipo de producto <span class="text-danger">*</span></label>
+                        <select class="form-select" id="tr-tipo_producto" name="tipo_producto" required>
+                            <option value="" selected disabled>Selecciona…</option>
+                            <option value="jugo">Jugo</option>
+                            <option value="concentrado">Concentrado</option>
+                            <option value="aceite">Aceite</option>
+                            <option value="nfc">NFC</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="tr-galones">Galones a traspasar <span class="text-danger">*</span></label>
+                        <input type="number" step="0.01" min="0.01" class="form-control" id="tr-galones" name="galones" required>
+                        <div class="form-text">Puede ser parcial (menor o igual al disponible).</div>
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <label class="form-label" for="tr-observaciones">Observaciones</label>
+                    <input type="text" class="form-control" id="tr-observaciones" name="observaciones">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-check-lg me-1"></i>Traspasar
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+<script>
+    // Rellena el modal de traspaso con los datos del lote seleccionado.
+    // Bootstrap 5 abre el modal automáticamente (data-bs-toggle) y aquí solo
+    // se rellenan los campos con la información de la fila.
+    document.querySelectorAll('.btn-traspaso').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var galones = parseFloat(this.dataset.galones || '0');
+            document.getElementById('tr-id_inventario_tqpf').value = this.dataset.id;
+            document.getElementById('tr-tanque').textContent = this.dataset.tanque;
+            document.getElementById('tr-lote').textContent = this.dataset.lote;
+            document.getElementById('tr-disponible').textContent = galones.toFixed(2);
+            var inputGalones = document.getElementById('tr-galones');
+            inputGalones.max = galones;
+            inputGalones.value = galones.toFixed(2);
+        });
+    });
+</script>
 {% endblock %}

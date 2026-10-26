@@ -38,6 +38,8 @@
                                 <option value="ajuste" {{ 'selected' if request.args.get('tipo') == 'ajuste' else '' }}>Ajuste</option>
                                 <option value="reproceso" {{ 'selected' if request.args.get('tipo') == 'reproceso' else '' }}>Reproceso</option>
                                 <option value="cambio_estado" {{ 'selected' if request.args.get('tipo') == 'cambio_estado' else '' }}>Cambio de Estado</option>
+                                <option value="entrada_tqpf" {{ 'selected' if request.args.get('tipo') == 'entrada_tqpf' else '' }}>Entrada TQPF</option>
+                                <option value="traspaso_tqpf_silo" {{ 'selected' if request.args.get('tipo') == 'traspaso_tqpf_silo' else '' }}>Traspaso TQPF → Silo</option>
                             </select>
             </div>
             <div class="col-md-3">
@@ -98,11 +100,11 @@
                                     {% set t = 'reproceso' %}
                                 {% endif %}
                             {% endif %}
-                            <span class="badge {{ 'bg-success' if t == 'entrada' else 'bg-danger' if t == 'salida' else 'bg-warning text-dark' if t == 'reproceso' else 'bg-info text-white' if t == 'cambio_estado' else 'bg-secondary' }}">
+                            <span class="badge {{ 'bg-success' if t == 'entrada' else 'bg-danger' if t == 'salida' else 'bg-warning text-dark' if t == 'reproceso' else 'bg-info text-white' if t == 'cambio_estado' else 'bg-primary' if t == 'entrada_tqpf' else 'bg-dark' if t == 'traspaso_tqpf_silo' else 'bg-secondary' }}">
                                 {{ t|replace('_', ' ')|title }}
                             </span>
                         </td>
-                        <td>{{ mov.silo.nombre_silo }}</td>
+                        <td>{{ mov.silo.nombre_silo if mov.silo else (mov.tanque.nombre_tanque if mov.tanque else '-') }}</td>
                         <td>{{ mov.lote.codigo_lote }}</td>
                         <td>{{ "{:,.2f}".format(mov.galones) }}</td>
                         <td>{{ mov.usuario.usuario }}</td>

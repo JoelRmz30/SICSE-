@@ -60,7 +60,6 @@
                 <div>
                     {% if current_user.rol != 'invitado' and current_user.usuario != 'invitado' %}
                     <a href="{{ url_for('registrar_entrada') }}" class="btn btn-sm btn-primary"><i class="bi bi-plus-circle"></i> Entrada</a>
-                    <a href="{{ url_for('registrar_salida') }}" class="btn btn-sm btn-outline-danger"><i class="bi bi-dash-circle"></i> Salida</a>
                     <a href="{{ url_for('registrar_reproceso') }}" class="btn btn-sm btn-outline-warning"><i class="bi bi-arrow-repeat"></i> Reproceso</a>
                     {% endif %}
                 </div>

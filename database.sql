@@ -48,11 +48,16 @@ CREATE TABLE IF NOT EXISTS lotes (
     pulpa DECIMAL(5,2), 
     id_estado INT, 
     id_cliente INT, 
+    cliente_manual VARCHAR(100) NULL COMMENT 'Cliente capturado como texto libre cuando no está en el catálogo',
+    es_mezcla TINYINT(1) NOT NULL DEFAULT 0, 
+    asignado_por VARCHAR(50) NULL, 
     FOREIGN KEY (id_estado) REFERENCES estados_producto(id_estado), 
     FOREIGN KEY (id_cliente) REFERENCES clientes(id_cliente) 
 ); 
 
 -- Tabla: inventario_silos
+-- Unicidad: un lote no se repite dentro del mismo silo y la posición LIFO
+-- es única por silo (la valida el servidor al desplazar posiciones).
 CREATE TABLE IF NOT EXISTS inventario_silos ( 
     id_inventario INT AUTO_INCREMENT PRIMARY KEY, 
     id_silo INT, 
@@ -61,21 +66,50 @@ CREATE TABLE IF NOT EXISTS inventario_silos (
     galones DECIMAL(10,2), 
     fecha_registro DATETIME, 
     FOREIGN KEY (id_silo) REFERENCES silos(id_silo), 
+    FOREIGN KEY (id_lote) REFERENCES lotes(id_lote), 
+    UNIQUE KEY uq_inventario_silo_posicion (id_silo, posicion), 
+    UNIQUE KEY uq_inventario_silo_lote (id_silo, id_lote) 
+); 
+
+-- Tabla: tanques_tqpf
+-- Tanques de proceso (pared fría) donde el producto permanece ANTES de los
+-- silos. De aquí se traspasa el lote al silo correspondiente.
+CREATE TABLE IF NOT EXISTS tanques_tqpf ( 
+    id_tanque INT AUTO_INCREMENT PRIMARY KEY, 
+    nombre_tanque VARCHAR(30) UNIQUE, 
+    capacidad_gal DECIMAL(10,2), 
+    tipo_producto VARCHAR(30) NULL, 
+    estado ENUM('activo','inactivo') DEFAULT 'activo' 
+); 
+
+-- Tabla: inventario_tqpf
+-- Contenido por lote de cada tanque de proceso. `posicion` maneja el LIFO
+-- (posición 1 = último ingreso, primero en salir).
+CREATE TABLE IF NOT EXISTS inventario_tqpf ( 
+    id_inventario_tqpf INT AUTO_INCREMENT PRIMARY KEY, 
+    id_tanque INT, 
+    id_lote INT, 
+    posicion INT, 
+    galones DECIMAL(10,2), 
+    fecha_registro DATETIME, 
+    FOREIGN KEY (id_tanque) REFERENCES tanques_tqpf(id_tanque), 
     FOREIGN KEY (id_lote) REFERENCES lotes(id_lote) 
 ); 
 
 -- Tabla: movimientos
 CREATE TABLE IF NOT EXISTS movimientos ( 
     id_movimiento INT AUTO_INCREMENT PRIMARY KEY, 
-    tipo_movimiento ENUM('entrada','salida','ajuste','reproceso','cambio_estado'), 
+    tipo_movimiento ENUM('entrada','salida','ajuste','reproceso','cambio_estado','entrada_tqpf','traspaso_tqpf_silo'), 
     id_silo INT, 
     id_lote INT, 
+    id_tanque INT, 
     galones DECIMAL(10,2), 
     fecha_movimiento DATETIME, 
     id_usuario INT, 
     observaciones TEXT, 
     FOREIGN KEY (id_silo) REFERENCES silos(id_silo), 
     FOREIGN KEY (id_lote) REFERENCES lotes(id_lote), 
+    FOREIGN KEY (id_tanque) REFERENCES tanques_tqpf(id_tanque), 
     FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario) 
 ); 
 
@@ -183,6 +217,7 @@ CREATE TABLE IF NOT EXISTS embarques (
     id_operador INT NULL,
     id_tractor INT NULL,
     id_remolque INT NULL,
+    id_silo INT NULL,
     turno TINYINT NOT NULL,
     temperatura_c DECIMAL(5,1) NULL,
     id_capturista INT NOT NULL,
@@ -200,6 +235,7 @@ CREATE TABLE IF NOT EXISTS embarques (
     CONSTRAINT fk_embarques_capturista FOREIGN KEY (id_capturista) REFERENCES usuarios(id_usuario),
     CONSTRAINT fk_embarques_facilitador FOREIGN KEY (id_facilitador) REFERENCES facilitadores(id_facilitador) ON DELETE SET NULL,
     CONSTRAINT fk_embarques_actualizado_por FOREIGN KEY (actualizado_por) REFERENCES usuarios(id_usuario) ON DELETE SET NULL,
+    CONSTRAINT fk_embarques_silo FOREIGN KEY (id_silo) REFERENCES silos(id_silo) ON DELETE SET NULL,
     CONSTRAINT chk_embarques_turno CHECK (turno IN (1, 2, 3))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -266,6 +302,24 @@ CREATE TABLE IF NOT EXISTS embarque_lotes (
     CONSTRAINT chk_embarque_lotes_cantidad CHECK (cantidad > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- lote_componentes - lotes de origen que forman un lote de mezcla (embarques de pipa)
+CREATE TABLE IF NOT EXISTS lote_componentes (
+    id_componente INT AUTO_INCREMENT PRIMARY KEY,
+    id_lote_mezcla INT NOT NULL,
+    id_lote_origen INT NOT NULL,
+    id_embarque INT NULL,
+    galones DECIMAL(10,2) NOT NULL,
+    creado_en DATETIME DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_lote_comp_mezcla FOREIGN KEY (id_lote_mezcla)
+        REFERENCES lotes(id_lote) ON DELETE CASCADE,
+    CONSTRAINT fk_lote_comp_origen FOREIGN KEY (id_lote_origen)
+        REFERENCES lotes(id_lote) ON DELETE RESTRICT,
+    CONSTRAINT fk_lote_comp_embarque FOREIGN KEY (id_embarque)
+        REFERENCES embarques(id_embarque) ON DELETE CASCADE,
+    CONSTRAINT uq_lote_componente UNIQUE (id_lote_mezcla, id_lote_origen, id_embarque),
+    CONSTRAINT chk_lote_comp_galones CHECK (galones > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- embarque_pesos (1:1) - pesos para el cuadre de galonaje
 CREATE TABLE IF NOT EXISTS embarque_pesos (
     id_embarque INT PRIMARY KEY,
@@ -305,7 +359,9 @@ INSERT INTO parametros_sistema (clave, valor, descripcion) VALUES
     ('embarque_en_planta_max_horas', '24', 'Horas máximas permitidas para un embarque en planta'),
     ('brix_min_concentrado', '60.0', 'Brix mínimo para concentrado'),
     ('brix_max_concentrado', '72.0', 'Brix máximo para concentrado'),
-    ('cuadre_tolerancia_pct', '1.0', 'Tolerancia porcentual para el cuadre de galonaje')
+    ('cuadre_tolerancia_pct', '1.0', 'Tolerancia porcentual para el cuadre de galonaje'),
+    ('permitir_entrada_directa_silo', '1', 'Permite captura directa a silo sin pasar por TQPF (1 = permitido, 0 = sólo traspaso desde TQPF)'),
+    ('tqpf_ocupacion_alerta_pct', '90', 'Porcentaje de ocupación de un tanque TQPF a partir del cual se genera alerta')
 ON DUPLICATE KEY UPDATE clave=clave;
 
 -- ============================================================

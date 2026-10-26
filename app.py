@@ -126,7 +126,10 @@ class Lote(db.Model):
     id_estado = db.Column(db.Integer, db.ForeignKey('estados_producto.id_estado'))
     id_cliente = db.Column(db.Integer, db.ForeignKey('clientes.id_cliente'), nullable=True)
     cliente_manual = db.Column(db.String(100))
-    
+    # Marca de lotes de mezcla generados en embarques de pipa.
+    es_mezcla = db.Column(db.Boolean, nullable=False, default=False)
+    asignado_por = db.Column(db.String(50), nullable=True)
+
     estado = db.relationship('EstadoProducto')
     cliente = db.relationship('Cliente')
     inventariosilos = db.relationship('InventarioSilo', backref='lote_ref', lazy=True)
@@ -141,18 +144,29 @@ class InventarioSilo(db.Model):
     fecha_registro = db.Column(db.DateTime, default=datetime.utcnow)
 
     silo = db.relationship('Silo')
-    lote = db.relationship('Lote')
+    lote = db.relationship('Lote', overlaps='inventariosilos,lote_ref')
+
+    # Un lote no se repite en un silo y la posición LIFO es única por silo.
+    __table_args__ = (
+        db.UniqueConstraint('id_silo', 'posicion', name='uq_inventario_silo_posicion'),
+        db.UniqueConstraint('id_silo', 'id_lote', name='uq_inventario_silo_lote'),
+    )
 
 class Movimiento(db.Model):
     """
-    Modelo existente de movimientos de inventario (entrada, salida, ajuste, reproceso, cambio_estado).
+    Modelo existente de movimientos de inventario.
+    Tipos: entrada, salida, ajuste, reproceso, cambio_estado,
+           entrada_tqpf (lote que entra a un tanque de proceso) y
+           traspaso_tqpf_silo (lote que pasa de TQPF a un silo).
     Reutilizado por embarque_lotes (vínculo opcional id_movimiento).
     """
     __tablename__ = 'movimientos'
     id_movimiento = db.Column(db.Integer, primary_key=True)
-    tipo_movimiento = db.Column(db.Enum('entrada', 'salida', 'ajuste', 'reproceso', 'cambio_estado'))
+    tipo_movimiento = db.Column(db.Enum('entrada', 'salida', 'ajuste', 'reproceso',
+                                        'cambio_estado', 'entrada_tqpf', 'traspaso_tqpf_silo'))
     id_silo = db.Column(db.Integer, db.ForeignKey('silos.id_silo'))
     id_lote = db.Column(db.Integer, db.ForeignKey('lotes.id_lote'))
+    id_tanque = db.Column(db.Integer, db.ForeignKey('tanques_tqpf.id_tanque'), nullable=True)
     galones = db.Column(db.Numeric(10, 2))
     fecha_movimiento = db.Column(db.DateTime, default=datetime.utcnow)
     id_usuario = db.Column(db.Integer, db.ForeignKey('usuarios.id_usuario'))
@@ -160,6 +174,7 @@ class Movimiento(db.Model):
 
     silo = db.relationship('Silo')
     lote = db.relationship('Lote')
+    tanque = db.relationship('TanqueTQPF')
     usuario = db.relationship('Usuario')
 
 
@@ -201,6 +216,31 @@ class InventarioTQPF(db.Model):
     lote = db.relationship('Lote')
 
 
+class LoteComponente(db.Model):
+    """
+    Lotes de origen que componen un lote de mezcla.
+
+    En un embarque de pipa el producto es una mezcla: el capturista elige los
+    lotes de origen y sus galones, e INVOCA asigna el código del lote de mezcla.
+    Cada fila guarda un lote de origen con los galones tomados de él.
+    """
+    __tablename__ = 'lote_componentes'
+    id_componente = db.Column(db.Integer, primary_key=True)
+    id_lote_mezcla = db.Column(db.Integer, db.ForeignKey('lotes.id_lote'), nullable=False)
+    id_lote_origen = db.Column(db.Integer, db.ForeignKey('lotes.id_lote'), nullable=False)
+    id_embarque = db.Column(db.Integer, db.ForeignKey('embarques.id_embarque'), nullable=True)
+    galones = db.Column(db.Numeric(10, 2), nullable=False)
+    creado_en = db.Column(db.DateTime, default=datetime.utcnow)
+
+    lote_mezcla = db.relationship('Lote', foreign_keys=[id_lote_mezcla])
+    lote_origen = db.relationship('Lote', foreign_keys=[id_lote_origen])
+
+    __table_args__ = (
+        db.UniqueConstraint('id_lote_mezcla', 'id_lote_origen', 'id_embarque',
+                            name='uq_lote_componente'),
+    )
+
+
 # =====================================================================
 # ===== MÓDULO EMBARQUES - MODELOS ====================================
 # =====================================================================
@@ -224,6 +264,18 @@ ESTILO_ESTATUS_EMBARQUE = {
     'cargado': 'success',
     'cancelado': 'danger',
 }
+
+# Tipos de unidad que pertenecen al grupo "pipa" (detalle y sellos de pipa).
+TIPOS_UNIDAD_PIPA = ('pipa_jumbo', 'pipa_chica', 'isotanque', 'flexitanque')
+
+# Tipos de unidad que embarcan MEZCLA OBLIGATORIA: el producto se junta de
+# varios lotes de origen y el código del lote lo asigna INVOCA.
+# Sólo la pipa jumbo y la pipa chica la exigen; en isotanque y flexitanque el
+# campo "lote de mezcla" es opcional (igual que caja, tráiler o tambores).
+TIPOS_UNIDAD_MEZCLA = ('pipa_jumbo', 'pipa_chica')
+
+# Área/sistema que asigna el código del lote de mezcla.
+ASIGNADO_POR_MEZCLA = 'INVOCA'
 
 
 class ProductoEmbarque(db.Model):
@@ -340,6 +392,7 @@ class Embarque(db.Model):
     id_operador = db.Column(db.Integer, db.ForeignKey('operadores.id_operador'), nullable=True)
     id_tractor = db.Column(db.Integer, db.ForeignKey('unidades_transporte.id_unidad'), nullable=True)
     id_remolque = db.Column(db.Integer, db.ForeignKey('unidades_transporte.id_unidad'), nullable=True)
+    id_silo = db.Column(db.Integer, db.ForeignKey('silos.id_silo'), nullable=True)
     turno = db.Column(db.SmallInteger, nullable=False)
     temperatura_c = db.Column(db.Numeric(5, 1), nullable=True)
     id_capturista = db.Column(db.Integer, db.ForeignKey('usuarios.id_usuario'), nullable=False)
@@ -356,6 +409,7 @@ class Embarque(db.Model):
     operador = db.relationship('Operador', foreign_keys=[id_operador])
     tractor = db.relationship('UnidadTransporte', foreign_keys=[id_tractor])
     remolque = db.relationship('UnidadTransporte', foreign_keys=[id_remolque])
+    silo = db.relationship('Silo')
     capturista = db.relationship('Usuario', foreign_keys=[id_capturista])
     facilitador = db.relationship('Facilitador', foreign_keys=[id_facilitador])
     actualizado_por_usuario = db.relationship('Usuario', foreign_keys=[actualizado_por])
@@ -386,14 +440,47 @@ class Embarque(db.Model):
         """Clase CSS Bootstrap para badge de estatus."""
         return ESTILO_ESTATUS_EMBARQUE.get(self.estatus, 'secondary')
 
+    @property
+    def es_pipa(self):
+        """True si el embarque es de pipa (jumbo/chica/isotanque/flexitanque).
+
+        En pipa el producto puede ser una mezcla y se captura el lote asignado
+        por INVOCA, con sus lotes de origen en lote_componentes.
+        """
+        return self.tipo_unidad in TIPOS_UNIDAD_PIPA
+
+    @property
+    def requiere_mezcla(self):
+        """True si el embarque EXIGE lote de mezcla de INVOCA (pipa jumbo/chica).
+
+        En isotanque y flexitanque el lote de mezcla es opcional, por lo que no
+        se genera la alerta de "pipa sin lote de mezcla".
+        """
+        return self.tipo_unidad in TIPOS_UNIDAD_MEZCLA
+
+    @property
+    def componentes_mezcla(self):
+        """Filas de lote_componentes del embarque (los lotes de origen)."""
+        if self.id_embarque is None:
+            return []
+        return LoteComponente.query.filter_by(id_embarque=self.id_embarque).all()
+
+    @property
+    def lote_mezcla(self):
+        """Devuelve el Lote de mezcla del embarque (o None si no aplica).
+
+        El lote de mezcla no vive en embarque_lotes (esos son los lotes de
+        origen); se localiza a través de lote_componentes.
+        """
+        componente = self.componentes_mezcla
+        return componente[0].lote_mezcla if componente else None
+
 
 class EmbarqueTiempos(db.Model):
     """
     Registro 1 a 1 de tiempos operativos del embarque.
-    Orden obligatorio: llegada <= entrada <= pesado_inicial <= pesaje_salida <= documentacion,
-    y salida >= pesaje_salida. La documentacion y la salida pueden registrarse en
-    cualquier orden entre si (en captura real la salida de planta puede ocurrir antes
-    de que se complete la documentacion).
+    Orden obligatorio y estricto:
+      llegada <= entrada <= pesado_inicial <= pesaje_salida <= documentacion <= salida
     Si faltan tiempos el estatus debe quedar 'en_planta'; con los 6 completos
     puede pasar a 'cargado'.
     """
@@ -417,7 +504,7 @@ class EmbarqueTiempos(db.Model):
             ('entrada', self.entrada, 'pesado_inicial', self.pesado_inicial),
             ('pesado_inicial', self.pesado_inicial, 'pesaje_salida', self.pesaje_salida),
             ('pesaje_salida', self.pesaje_salida, 'documentacion', self.documentacion),
-            ('pesaje_salida', self.pesaje_salida, 'salida', self.salida),
+            ('documentacion', self.documentacion, 'salida', self.salida),
         ]
         nombres = {
             'llegada': 'Fecha y hora Registro llegada planta',
@@ -429,7 +516,10 @@ class EmbarqueTiempos(db.Model):
         }
         for a_n, a_v, b_n, b_v in pares:
             if a_v and b_v and a_v > b_v:
-                return False, f'{nombres[a_n]} no puede ser posterior a {nombres[b_n]}.'
+                return False, (
+                    'Orden de tiempos INCORRECTO: '
+                    f'{nombres[a_n]} no puede ser posterior a {nombres[b_n]}.'
+                )
         return True, ''
 
     def completos(self):
@@ -1348,6 +1438,29 @@ def calcular_alertas():
                 'url': url_for('editar_embarque', id_embarque=emb.id_embarque),
             })
 
+        # Pipa (jumbo/chica) sin lote de mezcla asignado por INVOCA
+        if emb.requiere_mezcla and emb.lote_mezcla is None:
+            alertas.append({
+                'tipo': 'embarque_pipa_sin_mezcla',
+                'severidad': 'warning',
+                'clave_unica': f'embarque:{emb.id_embarque}:pipa_sin_mezcla',
+                'mensaje': f'Embarque {emb.num_cita} (pipa) sin lote de mezcla de INVOCA.',
+                'url': url_for('editar_embarque', id_embarque=emb.id_embarque),
+            })
+
+        # Orden de tiempos incorrecto: el proceso debe seguir la secuencia
+        # llegada -> entrada -> pesado inicial -> pesaje salida -> documentación -> salida.
+        if tiempos is not None:
+            orden_ok, orden_msg = tiempos.tiempos_ordenados()
+            if not orden_ok:
+                alertas.append({
+                    'tipo': 'embarque_orden_tiempos_incorrecto',
+                    'severidad': 'danger',
+                    'clave_unica': f'embarque:{emb.id_embarque}:orden_tiempos_incorrecto',
+                    'mensaje': f'Embarque {emb.num_cita}: {orden_msg}',
+                    'url': url_for('editar_embarque', id_embarque=emb.id_embarque),
+                })
+
         # Sin tiempo documental (documentación) cuando está en planta o cargado
         if emb.estatus in ('en_planta', 'cargado') and (tiempos is None or tiempos.documentacion is None):
             alertas.append({
@@ -1388,6 +1501,26 @@ def calcular_alertas():
             })
 
     # ------------------------------------------------------------------
+    # 4b. TQPF: tanques de proceso con ocupación alta
+    # ------------------------------------------------------------------
+    umbral_tqpf = _get_parametro_float('tqpf_ocupacion_alerta_pct', 90.0)
+    for tanque in TanqueTQPF.query.filter_by(estado='activo').all():
+        cap_t = float(tanque.capacidad_gal) if tanque.capacidad_gal else 0
+        if cap_t <= 0:
+            continue
+        items_t = InventarioTQPF.query.filter_by(id_tanque=tanque.id_tanque).all()
+        gal_t = sum((float(i.galones or 0) for i in items_t), 0.0)
+        pct_t = (gal_t / cap_t) * 100
+        if pct_t >= umbral_tqpf:
+            alertas.append({
+                'tipo': 'tqpf_ocupacion_alta',
+                'severidad': 'warning' if pct_t < 98 else 'danger',
+                'clave_unica': f'tqpf:{tanque.id_tanque}:ocupacion_alta',
+                'mensaje': f'Tanque {tanque.nombre_tanque} al {pct_t:.1f}% de ocupación.',
+                'url': url_for('inventario_tqpf'),
+            })
+
+    # ------------------------------------------------------------------
     # 5. EMPAQUE: negativo, sin stock, bajo mínimo, diferencia con Dynamics
     # ------------------------------------------------------------------
     articulos = EmpaqueArticulo.query.filter_by(activo=True).all()
@@ -1422,6 +1555,8 @@ _TITULOS_POR_TIPO = {
     'embarque_sin_documentacion': 'Embarque sin documentación',
     'embarque_tiempo_excedido': 'Embarque excede tiempo en planta',
     'embarque_programado_vencido': 'Embarque programado vencido',
+    'embarque_pipa_sin_mezcla': 'Embarque en pipa sin lote de mezcla',
+    'tqpf_ocupacion_alta': 'Tanque TQPF con ocupación alta',
 }
 
 
@@ -1765,6 +1900,77 @@ def _forzar_cambio_password():
         flash('Por seguridad, debe cambiar su contraseña antes de continuar.', 'warning')
         return redirect(url_for('cambiar_password'))
 
+# =====================================================================
+# Helpers del flujo Silo
+# Compartidos por la captura directa a silo y por el traspaso TQPF -> Silo.
+# =====================================================================
+
+# Nombres en español de los tipos de producto del silo.
+TIPO_PRODUCTO_ESP = {
+    'jugo': 'Jugo',
+    'concentrado': 'Concentrado',
+    'aceite': 'Aceite',
+    'nfc': 'NFC',
+}
+
+
+def _permitir_entrada_directa():
+    """
+    Indica si el sistema permite capturar entradas directas a silo (sin pasar
+    por TQPF). Se controla con el parámetro `permitir_entrada_directa_silo`.
+    """
+    valor = _get_parametro_str('permitir_entrada_directa_silo', '1')
+    return str(valor).strip().lower() not in ('0', 'false', 'no')
+
+
+def _preparar_entrada_silo(id_silo, tipo_producto, galones):
+    """
+    Valida que un silo pueda recibir `galones` del `tipo_producto` indicado y
+    deja el silo listo para la entrada (tipo de producto y capacidad).
+
+    Es la validación compartida entre la captura directa a silo y el traspaso
+    desde TQPF, para que ambos caminos apliquen las MISMAS reglas.
+
+    Devuelve (silo, galones_actuales, error):
+      - error es None si todo está correcto; si no, contiene el mensaje
+        amigable que debe mostrarse al usuario.
+    """
+    silo = Silo.query.get(id_silo)
+    if not silo:
+        return None, Decimal('0'), 'Error: El silo seleccionado no existe.'
+
+    inventario_actual = InventarioSilo.query.filter_by(id_silo=silo.id_silo).all()
+    galones_actuales = sum((Decimal(str(i.galones or 0)) for i in inventario_actual), Decimal('0'))
+
+    # Si el silo está vacío, se refresca su tipo con el tipo permitido.
+    if galones_actuales <= 0 and silo.tipo_permitido:
+        silo.tipo_producto = silo.tipo_permitido
+    elif galones_actuales <= 0 and silo.tipo_producto is not None:
+        silo.tipo_producto = None
+
+    if silo.tipo_permitido and tipo_producto != silo.tipo_permitido:
+        return silo, galones_actuales, (
+            f'Error: Este silo está destinado a '
+            f'{TIPO_PRODUCTO_ESP.get(silo.tipo_permitido, silo.tipo_permitido)}.')
+
+    if silo.tipo_producto:
+        if silo.tipo_producto != tipo_producto:
+            return silo, galones_actuales, (
+                f'Error: Este silo ya tiene '
+                f'{TIPO_PRODUCTO_ESP.get(silo.tipo_producto, silo.tipo_producto)}. '
+                f'No puedes agregar {TIPO_PRODUCTO_ESP.get(tipo_producto, tipo_producto)}.')
+    else:
+        # Primera vez que se llena el silo: se fija su tipo de producto.
+        silo.tipo_producto = silo.tipo_permitido or tipo_producto
+
+    capacidad_gal = Decimal(str(silo.capacidad_gal or 0))
+    if (galones_actuales + Decimal(str(galones))) > capacidad_gal:
+        disponibles = capacidad_gal - galones_actuales
+        return silo, galones_actuales, (
+            f'Error: Capacidad del silo excedida. Galones disponibles: {float(disponibles):.2f}')
+
+    return silo, galones_actuales, None
+
 # Rutas
 @app.route('/')
 @login_required
@@ -1975,6 +2181,12 @@ def registrar_entrada():
         if updated1 or updated2:
             db.session.commit()
     if request.method == 'POST':
+        # Restricción configurable: si el parámetro está apagado, la captura
+        # directa a silo se bloquea y sólo se permite el traspaso desde TQPF.
+        if not _permitir_entrada_directa():
+            flash('La entrada directa a silo está deshabilitada. '
+                  'Usa el traspaso desde TQPF.', 'danger')
+            return redirect(url_for('inventario_tqpf'))
         try:
             id_silo = request.form.get('id_silo')
             tipo_producto = request.form.get('tipo_producto')
@@ -1994,51 +2206,12 @@ def registrar_entrada():
                 flash('Error: Formato de lote incorrecto. Usa: 005-20251210-044497', 'danger')
                 return redirect(url_for('registrar_entrada'))
 
-            silo = Silo.query.get(id_silo)
-            inventario_actual = InventarioSilo.query.filter_by(id_silo=id_silo).all()
-            galones_actuales = sum(float(item.galones) for item in inventario_actual)
-            if galones_actuales <= 0 and silo.tipo_permitido:
-                silo.tipo_producto = silo.tipo_permitido
-            elif galones_actuales <= 0 and silo.tipo_producto is not None:
-                silo.tipo_producto = None
-
-            if silo.tipo_permitido and tipo_producto != silo.tipo_permitido:
-                tipo_silo_esp = {
-                    'jugo': 'Jugo',
-                    'concentrado': 'Concentrado',
-                    'aceite': 'Aceite',
-                    'nfc': 'NFC'
-                }.get(silo.tipo_permitido, silo.tipo_permitido)
-                flash(f'Error: Este silo está destinado a {tipo_silo_esp}.', 'danger')
-                return redirect(url_for('registrar_entrada'))
-
-            # Verificar tipo del silo
-            if silo.tipo_producto:
-                if silo.tipo_producto != tipo_producto:
-                    # Obtener nombres en español
-                    tipo_silo_esp = {
-                        'jugo': 'Jugo',
-                        'concentrado': 'Concentrado',
-                        'aceite': 'Aceite',
-                        'nfc': 'NFC'
-                    }.get(silo.tipo_producto, silo.tipo_producto)
-                    tipo_nuevo_esp = {
-                        'jugo': 'Jugo',
-                        'concentrado': 'Concentrado',
-                        'aceite': 'Aceite',
-                        'nfc': 'NFC'
-                    }.get(tipo_producto, tipo_producto)
-                    flash(f'Error: Este silo ya tiene {tipo_silo_esp}. No puedes agregar {tipo_nuevo_esp}.', 'danger')
-                    return redirect(url_for('registrar_entrada'))
-            else:
-                # Establecer el tipo del silo por primera vez
-                silo.tipo_producto = silo.tipo_permitido or tipo_producto
-
-            # Verificar capacidad del silo
-            capacidad_gal = float(silo.capacidad_gal)
-            if (galones_actuales + galones) > capacidad_gal:
-                disponibles = capacidad_gal - galones_actuales
-                flash(f'Error: Capacidad del silo excedida. Galones disponibles: {disponibles:.2f}', 'danger')
+            # Validaciones compartidas del silo (tipo permitido, compatibilidad
+            # con el producto que ya contiene y capacidad disponible).
+            silo, galones_actuales, err_silo = _preparar_entrada_silo(
+                id_silo, tipo_producto, galones)
+            if err_silo:
+                flash(err_silo, 'danger')
                 return redirect(url_for('registrar_entrada'))
 
             # 1. Crear o buscar lote
@@ -2679,51 +2852,128 @@ def configurar_silos():
     silos = Silo.query.order_by(Silo.nombre_silo).all()
     return render_template('admin/silos.html', silos=silos)
 
+# =====================================================================
+# Helpers del módulo TQPF
+# =====================================================================
+REGEX_CODIGO_LOTE = re.compile(r'^\d{3}-\d{8}-\d{6}$')
+
+
+def _renumerar_posiciones_tqpf(id_tanque):
+    """Renumera 1..n las posiciones LIFO del inventario de un tanque TQPF."""
+    items = (InventarioTQPF.query.filter_by(id_tanque=id_tanque)
+             .order_by(InventarioTQPF.posicion.asc(),
+                       InventarioTQPF.id_inventario_tqpf.asc()).all())
+    for i, it in enumerate(items, start=1):
+        it.posicion = i
+
+
+def _tqpf_registrar_entrada(form):
+    """
+    Registra la entrada de un lote a un tanque de proceso (TQPF).
+
+    Flujo real: los lotes se asignan PRIMERO al tanque de pared fría. Si el
+    lote no existe en el catálogo se crea; si ya existe se reutiliza.
+
+    Valida: tanque activo, formato del código de lote, galones > 0, capacidad
+    del tanque y que el lote no esté ya en ese mismo tanque.
+    Registra un movimiento `entrada_tqpf`.
+
+    Lanza ValueError con un mensaje amigable si algo no cumple.
+    """
+    id_tanque = _parse_int_or_none(form.get('id_tanque'))
+    codigo_lote = (form.get('codigo_lote') or '').strip()
+    galones = _parse_decimal_or_none(form.get('galones'))
+
+    tanque = TanqueTQPF.query.get(id_tanque) if id_tanque else None
+    if not tanque:
+        raise ValueError('Selecciona un tanque válido.')
+    if tanque.estado != 'activo':
+        raise ValueError(f'El tanque {tanque.nombre_tanque} está inactivo.')
+    if not REGEX_CODIGO_LOTE.match(codigo_lote):
+        raise ValueError('Formato de lote incorrecto. Usa: 005-20251210-044497')
+    if galones is None or galones <= 0:
+        raise ValueError('Captura una cantidad de galones mayor a cero.')
+
+    # Capacidad del tanque (sólo se valida si el tanque tiene capacidad capturada).
+    cap = Decimal(str(tanque.capacidad_gal or 0))
+    if cap > 0:
+        actuales = sum((Decimal(str(i.galones or 0))
+                        for i in InventarioTQPF.query.filter_by(id_tanque=tanque.id_tanque).all()),
+                       Decimal('0'))
+        if actuales + galones > cap:
+            raise ValueError(f'Capacidad del tanque excedida. '
+                             f'Disponibles: {float(cap - actuales):.2f} gal.')
+
+    # Lote: se crea si no existe; si existe se reutiliza.
+    lote = Lote.query.filter_by(codigo_lote=codigo_lote).first()
+    if not lote:
+        lote = Lote(
+            codigo_lote=codigo_lote,
+            fecha_lote=_parse_date_or_none(form.get('fecha_lote')),
+            brix=_parse_decimal_or_none(form.get('brix')),
+            relacion=_parse_decimal_or_none(form.get('relacion')),
+            pulpa=_parse_decimal_or_none(form.get('pulpa')),
+            id_estado=_parse_int_or_none(form.get('id_estado')),
+            id_cliente=_parse_int_or_none(form.get('id_cliente')),
+            cliente_manual=(form.get('cliente_manual') or '').strip() or None,
+        )
+        db.session.add(lote)
+        db.session.flush()
+
+    # No se permite el mismo lote dos veces en el mismo tanque.
+    if InventarioTQPF.query.filter_by(id_tanque=tanque.id_tanque, id_lote=lote.id_lote).first():
+        raise ValueError(f'El lote {codigo_lote} ya está registrado en {tanque.nombre_tanque}.')
+
+    # El último ingreso queda en la posición 1 (consumo LIFO).
+    for it in InventarioTQPF.query.filter_by(id_tanque=tanque.id_tanque).all():
+        it.posicion = (it.posicion or 0) + 1
+
+    db.session.add(InventarioTQPF(
+        id_tanque=tanque.id_tanque,
+        id_lote=lote.id_lote,
+        posicion=1,
+        galones=galones,
+    ))
+    db.session.add(Movimiento(
+        tipo_movimiento='entrada_tqpf',
+        id_tanque=tanque.id_tanque,
+        id_lote=lote.id_lote,
+        galones=galones,
+        id_usuario=current_user.id_usuario,
+        observaciones=f'Entrada a {tanque.nombre_tanque}',
+    ))
+    db.session.commit()
+
+
 @app.route('/tqpf', methods=['GET', 'POST'])
 @login_required
 def inventario_tqpf():
     """
     Inventario de tanques de proceso (TQPF).
 
-    Muestra el contenido de cada tanque (lote, Brix y galones), el total y
-    el porcentaje de ocupación. Permite registrar la entrada de un lote y
-    vaciar un lote del tanque. El inventario de TQPF es independiente del
-    inventario de silos.
+    Los lotes se asignan primero al tanque de pared fría y de ahí se traspasan
+    al silo. Esta pantalla muestra el contenido de cada tanque (lote, Brix y
+    galones), el total y el porcentaje de ocupación, y permite registrar la
+    entrada de un lote y vaciar un lote del tanque.
     """
     if request.method == 'POST':
         accion = (request.form.get('accion') or '').strip()
         try:
             if accion == 'entrada':
-                id_tanque = _parse_int_or_none(request.form.get('id_tanque'))
-                id_lote = _parse_int_or_none(request.form.get('id_lote'))
-                galones = _parse_decimal_or_none(request.form.get('galones'))
-                tanque = TanqueTQPF.query.get(id_tanque) if id_tanque else None
-                lote = Lote.query.get(id_lote) if id_lote else None
-                if not tanque:
-                    flash('Selecciona un tanque válido.', 'danger')
-                elif not lote:
-                    flash('Selecciona un lote válido.', 'danger')
-                elif galones is None or galones <= 0:
-                    flash('Captura una cantidad de galones mayor a cero.', 'danger')
-                else:
-                    # El último ingreso queda en la posición 1 (consumo LIFO):
-                    # se desplazan +1 las posiciones existentes del tanque.
-                    existentes = InventarioTQPF.query.filter_by(id_tanque=tanque.id_tanque).all()
-                    for it in existentes:
-                        it.posicion = (it.posicion or 0) + 1
-                    db.session.add(InventarioTQPF(
-                        id_tanque=tanque.id_tanque,
-                        id_lote=lote.id_lote,
-                        posicion=1,
-                        galones=galones,
-                    ))
-                    db.session.commit()
-                    flash(f'Se registraron {galones} gal del lote {lote.codigo_lote} en {tanque.nombre_tanque}.', 'success')
+                _tqpf_registrar_entrada(request.form)
+                flash('Entrada registrada en el tanque correctamente.', 'success')
             elif accion == 'vaciar':
-                item = InventarioTQPF.query.get_or_404(_parse_int_or_none(request.form.get('id_inventario_tqpf')))
+                item = InventarioTQPF.query.get_or_404(
+                    _parse_int_or_none(request.form.get('id_inventario_tqpf')))
+                id_tanque = item.id_tanque
                 db.session.delete(item)
+                db.session.flush()
+                _renumerar_posiciones_tqpf(id_tanque)
                 db.session.commit()
                 flash('Se vació el lote del tanque.', 'success')
+        except ValueError as e:
+            db.session.rollback()
+            flash(str(e), 'danger')
         except Exception as e:
             db.session.rollback()
             flash(f'Error: {e}', 'danger')
@@ -2742,9 +2992,120 @@ def inventario_tqpf():
         detalle[t.id_tanque] = {'filas': items, 'galones': galones, 'pct': pct}
         total_general += galones
 
-    lotes = Lote.query.order_by(Lote.codigo_lote).all()
+    estados = EstadoProducto.query.all()
+    clientes = Cliente.query.all()
+    silos = Silo.query.filter_by(estado='activo').all()
     return render_template('tqpf.html', tanques=tanques, detalle=detalle,
-                           total_general=total_general, lotes=lotes)
+                           total_general=total_general, estados=estados,
+                           clientes=clientes, silos=silos)
+
+
+@app.route('/tqpf/traspaso', methods=['POST'])
+@login_required
+def traspasar_tqpf_silo():
+    """
+    Traspasa un lote de un tanque de proceso (TQPF) hacia un silo.
+
+    - Descuenta `galones` del inventario del tanque (puede ser parcial; si la
+      fila llega a 0 se elimina y se renumeran las posiciones LIFO).
+    - Aplica las MISMAS validaciones que la entrada al silo (tipo permitido,
+      compatibilidad con el producto que ya contiene y capacidad disponible).
+    - Coloca el lote en el silo con la posición 1 (último ingresado).
+    - Registra dos movimientos: `traspaso_tqpf_silo` (con id_tanque) y la
+      entrada correspondiente al silo.
+    Todo sucede en UNA transacción; ante cualquier error se revierte.
+    """
+    if _deny_if_guest():
+        return redirect(url_for('index'))
+    try:
+        id_inv_tqpf = _parse_int_or_none(request.form.get('id_inventario_tqpf'))
+        id_silo = _parse_int_or_none(request.form.get('id_silo'))
+        tipo_producto = (request.form.get('tipo_producto') or '').strip() or None
+        galones = _parse_decimal_or_none(request.form.get('galones'))
+        observaciones = (request.form.get('observaciones') or '').strip()
+
+        item = InventarioTQPF.query.get(id_inv_tqpf) if id_inv_tqpf else None
+        if not item:
+            raise ValueError('El lote seleccionado ya no está en el tanque.')
+        if galones is None or galones <= 0:
+            raise ValueError('Captura una cantidad de galones mayor a cero.')
+
+        disponible = Decimal(str(item.galones or 0))
+        if galones > disponible:
+            raise ValueError(f'El tanque sólo tiene {float(disponible):.2f} gal de ese lote.')
+
+        # Mismas validaciones que la entrada al silo.
+        silo, _g_act, err_silo = _preparar_entrada_silo(id_silo, tipo_producto, galones)
+        if err_silo:
+            raise ValueError(err_silo.replace('Error: ', ''))
+
+        tanque = item.tanque
+        id_tanque = item.id_tanque
+        id_lote = item.id_lote
+        codigo_lote = item.lote.codigo_lote if item.lote else id_lote
+
+        # 1) Descontar del tanque (y eliminar la fila si queda en cero).
+        if galones >= disponible:
+            db.session.delete(item)
+        else:
+            item.galones = disponible - galones
+        db.session.flush()
+        _renumerar_posiciones_tqpf(id_tanque)
+
+        # 2) Ingresar al silo en la posición 1 (LIFO).
+        existente = InventarioSilo.query.filter_by(
+            id_silo=silo.id_silo, id_lote=id_lote).first()
+        if existente:
+            # El lote ya estaba en el silo: se suma a su contenido.
+            existente.galones = Decimal(str(existente.galones or 0)) + galones
+        else:
+            for it in InventarioSilo.query.filter_by(id_silo=silo.id_silo).all():
+                it.posicion = (it.posicion or 0) + 1
+            db.session.add(InventarioSilo(
+                id_silo=silo.id_silo,
+                id_lote=id_lote,
+                posicion=1,
+                galones=galones,
+            ))
+        db.session.flush()
+
+        # 3) Movimientos: traspaso (tanque) y entrada (silo).
+        obs = f'Traspaso {tanque.nombre_tanque} -> {silo.nombre_silo} (Lote {codigo_lote})'
+        if observaciones:
+            obs = f'{obs}. {observaciones}'
+        db.session.add(Movimiento(
+            tipo_movimiento='traspaso_tqpf_silo',
+            id_tanque=id_tanque,
+            id_silo=silo.id_silo,
+            id_lote=id_lote,
+            galones=galones,
+            id_usuario=current_user.id_usuario,
+            observaciones=obs,
+        ))
+        db.session.add(Movimiento(
+            tipo_movimiento='entrada',
+            id_silo=silo.id_silo,
+            id_lote=id_lote,
+            galones=galones,
+            id_usuario=current_user.id_usuario,
+            observaciones=obs,
+        ))
+        db.session.commit()
+        flash(f'Se traspasaron {float(galones):.2f} gal del lote {codigo_lote} '
+              f'de {tanque.nombre_tanque} a {silo.nombre_silo}.', 'success')
+    except ValueError as e:
+        db.session.rollback()
+        flash(f'Error: {e}', 'danger')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Ocurrió un error al traspasar el lote: {e}', 'danger')
+    else:
+        # Evaluar alertas después de un traspaso exitoso.
+        try:
+            sincronizar_alertas()
+        except Exception:
+            db.session.rollback()
+    return redirect(url_for('inventario_tqpf'))
 
 
 @app.route('/admin/tqpf', methods=['GET', 'POST'])
@@ -3312,18 +3673,34 @@ def listar_embarques():
         if emb.producto and emb.producto.unidad_medida == 'KG':
             kg_embarcados += emb.cantidad_total
 
-    # Tiempo medio en planta (solo embarques con tiempos completos dentro de los filtros)
+    # Tiempo medio en planta (solo embarques con tiempos completos dentro de los filtros).
+    # Se lleva además un KPI desglosado por tipo de transporte, porque el proceso
+    # es distinto: las pipas y los tambores no tardan lo mismo en planta.
+    def _promedio_td(segundos):
+        """Convierte una lista de segundos a su promedio en timedelta (None si vacía)."""
+        return timedelta(seconds=sum(segundos) / len(segundos)) if segundos else None
+
     tiempos_tds = []
+    tiempos_por_grupo = {'pipa': [], 'caja': [], 'tambor': []}
     for emb in embarques_mes:
         if emb.tiempos and emb.tiempos.tiempo_en_planta:
-            tiempos_tds.append(emb.tiempos.tiempo_en_planta.total_seconds())
-    tiempo_medio_seg = (sum(tiempos_tds) / len(tiempos_tds)) if tiempos_tds else 0
-    if tiempo_medio_seg > 0:
-        h, r = divmod(int(tiempo_medio_seg), 3600)
-        m = r // 60
-        tiempo_medio_texto = f'{h} h {m} min'
-    else:
-        tiempo_medio_texto = '0 min'
+            seg = emb.tiempos.tiempo_en_planta.total_seconds()
+            tiempos_tds.append(seg)
+            grupo = TIPO_UNIDAD_GRUPO.get(emb.tipo_unidad)
+            if grupo in tiempos_por_grupo:
+                tiempos_por_grupo[grupo].append(seg)
+
+    tiempo_medio_texto = _formatear_timedelta(_promedio_td(tiempos_tds)) or '0 min'
+
+    # KPI por tipo de transporte (promedio y número de embarques considerados).
+    tiempos_transporte = [
+        {
+            'etiqueta': etiqueta,
+            'tiempo': _formatear_timedelta(_promedio_td(tiempos_por_grupo[clave])) or '-',
+            'muestras': len(tiempos_por_grupo[clave]),
+        }
+        for clave, etiqueta in (('pipa', 'Pipas'), ('caja', 'Cajas'), ('tambor', 'Tambores'))
+    ]
 
     # --- Paginación del listado con filtros ---
     q = _construir_query_embarques(filtros)
@@ -3357,6 +3734,7 @@ def listar_embarques():
             'total_mes': total_mes,
             'kg_embarcados': f'{float(kg_embarcados):,.2f}',
             'tiempo_medio': tiempo_medio_texto,
+            'tiempos_transporte': tiempos_transporte,
         },
         formatear_timedelta=_formatear_timedelta,
     )
@@ -3375,6 +3753,7 @@ def _cargar_catalogos_formulario():
         'tractores': UnidadTransporte.query.filter_by(activo=True, tipo='tractor').order_by(UnidadTransporte.placa).all(),
         'remolques': UnidadTransporte.query.filter_by(activo=True, tipo='remolque').order_by(UnidadTransporte.placa).all(),
         'lavaderos': Lavadero.query.filter_by(activo=True).order_by(Lavadero.nombre).all(),
+        'silos': Silo.query.filter_by(estado='activo').order_by(Silo.nombre_silo).all(),
     }
 
 
@@ -3820,6 +4199,134 @@ def _aplicar_salida_inventario_embarque(embarque, lotes_info, id_usuario):
         _renumerar_posiciones_silo(id_silo)
 
 
+def _calcular_promedio_ponderado(lotes_info, atributo):
+    """
+    Promedio ponderado por galones de un atributo (°Brix, relación o pulpa) de
+    los lotes de origen. Devuelve None si no hay datos suficientes.
+    """
+    total = Decimal('0')
+    acumulado = Decimal('0')
+    for _id, cantidad, lote_obj in lotes_info:
+        if lote_obj is None or cantidad is None:
+            continue
+        valor = getattr(lote_obj, atributo, None)
+        if valor is None:
+            continue
+        c = Decimal(str(cantidad))
+        total += c
+        acumulado += c * Decimal(str(valor))
+    if total > 0:
+        return (acumulado / total).quantize(Decimal('0.01'))
+    return None
+
+
+def _guardar_lote_mezcla(embarque, request_form, lotes_info):
+    """
+    Crea/actualiza el lote de mezcla (asignado por INVOCA) de un embarque de pipa
+    y sus componentes (lotes de origen con sus galones).
+
+    Reglas:
+      - El código del lote de mezcla lo asigna INVOCA; el sistema solo lo captura
+        y valida el formato 005-AAAAMMDD-NNNNNN.
+      - No puede existir ya como lote de producto con inventario.
+      - °Brix, relación y pulpa se toman del formulario si se capturan; si no,
+        se calculan ponderados por galones de los lotes de origen.
+      - Se inserta una fila en lote_componentes por cada lote de origen; la suma
+        de componentes debe cuadrar con lo cargado.
+
+    Devuelve (lote_mezcla, error). error es None si todo está correcto.
+    """
+    # Al editar, se limpian los componentes previos para recalcularlos.
+    if embarque.id_embarque is not None:
+        LoteComponente.query.filter_by(id_embarque=embarque.id_embarque).delete(
+            synchronize_session=False)
+        db.session.flush()
+
+    codigo = (request_form.get('lote_mezcla') or '').strip()
+    if not codigo:
+        return None, None
+    if not REGEX_CODIGO_LOTE.match(codigo):
+        return None, 'Formato del lote de mezcla incorrecto. Usa: 005-20251210-044497'
+
+    lote = Lote.query.filter_by(codigo_lote=codigo).first()
+    if lote is not None and not lote.es_mezcla:
+        # No se puede reutilizar un lote de producto que ya tiene inventario.
+        if InventarioSilo.query.filter_by(id_lote=lote.id_lote).first():
+            return None, f'El lote {codigo} ya existe como lote de producto con inventario.'
+    if lote is None:
+        lote = Lote(codigo_lote=codigo)
+        db.session.add(lote)
+        db.session.flush()
+
+    # °Brix, relación y pulpa: del formulario o ponderados por galones.
+    brix = _parse_decimal_or_none(request_form.get('lote_mezcla_brix'))
+    if brix is None:
+        brix = _calcular_promedio_ponderado(lotes_info, 'brix')
+    relacion = _parse_decimal_or_none(request_form.get('lote_mezcla_relacion'))
+    if relacion is None:
+        relacion = _calcular_promedio_ponderado(lotes_info, 'relacion')
+    pulpa = _parse_decimal_or_none(request_form.get('lote_mezcla_pulpa'))
+    if pulpa is None:
+        pulpa = _calcular_promedio_ponderado(lotes_info, 'pulpa')
+
+    lote.es_mezcla = True
+    lote.asignado_por = ASIGNADO_POR_MEZCLA
+    lote.brix = brix
+    lote.relacion = relacion
+    lote.pulpa = pulpa
+    if lote.fecha_lote is None:
+        lote.fecha_lote = embarque.fecha_embarque
+
+    # Una fila por lote de origen con sus galones.
+    total_componentes = Decimal('0')
+    total_cargado = Decimal('0')
+    for id_lote, cantidad, _lote_obj in lotes_info:
+        if cantidad is None:
+            continue
+        c = Decimal(str(cantidad))
+        if c <= 0:
+            continue
+        total_cargado += c
+        db.session.add(LoteComponente(
+            id_lote_mezcla=lote.id_lote,
+            id_lote_origen=id_lote,
+            id_embarque=embarque.id_embarque,
+            galones=c,
+        ))
+        total_componentes += c
+
+    if total_componentes <= 0:
+        return None, 'El lote de mezcla requiere al menos un lote de origen con galones.'
+    if total_componentes != total_cargado:
+        return None, (
+            f'La suma de los componentes ({float(total_componentes):.2f} gal) '
+            f'no cuadra con lo cargado ({float(total_cargado):.2f} gal).')
+    db.session.flush()
+    return lote, None
+
+
+def _eliminar_lote_mezcla(embarque):
+    """
+    Elimina los componentes y el lote de mezcla de un embarque (al cancelar).
+    El lote de mezcla solo se borra del catálogo si ya no lo usa otro embarque.
+    """
+    if embarque.id_embarque is None:
+        return
+    componentes = LoteComponente.query.filter_by(id_embarque=embarque.id_embarque).all()
+    if not componentes:
+        return
+    ids_mezcla = {c.id_lote_mezcla for c in componentes}
+    for c in componentes:
+        db.session.delete(c)
+    db.session.flush()
+    for id_mezcla in ids_mezcla:
+        # Si el lote de mezcla ya no tiene componentes, se elimina del catálogo.
+        if not LoteComponente.query.filter_by(id_lote_mezcla=id_mezcla).first():
+            lote = Lote.query.get(id_mezcla)
+            if lote is not None and lote.es_mezcla:
+                db.session.delete(lote)
+
+
 def _guardar_embarque_desde_form(embarque, request_form, es_nuevo, id_embarque_actual=None):
     """
     Construye/actualiza un Embarque + hijas desde request.form, valida y guarda.
@@ -3879,6 +4386,9 @@ def _guardar_embarque_desde_form(embarque, request_form, es_nuevo, id_embarque_a
         tipo_unidad = (request_form.get('tipo_unidad') or '').strip()
         if tipo_unidad in TIPO_UNIDAD_GRUPO:
             embarque.tipo_unidad = tipo_unidad
+
+        # Silo de origen del embarque (un solo silo por embarque).
+        embarque.id_silo = _parse_int_or_none(request_form.get('id_silo'))
 
         # 2b) Resolver transportista / operador (soporta "Agregar nuevo")
         #     y tractor / remolque. Si cualquiera devuelve error, abortar.
@@ -4062,6 +4572,16 @@ def _guardar_embarque_desde_form(embarque, request_form, es_nuevo, id_embarque_a
                 flash(str(ve), 'danger')
                 return False, [str(ve)]
 
+            # 8c) Lote de mezcla (solo pipas): el código lo asigna INVOCA. Se
+            #     captura y se generan sus componentes desde los lotes de origen.
+            if embarque.es_pipa:
+                _lote_mezcla, err_mezcla = _guardar_lote_mezcla(
+                    embarque, request_form, lotes_info)
+                if err_mezcla:
+                    db.session.rollback()
+                    flash(err_mezcla, 'danger')
+                    return False, [err_mezcla]
+
         # 8a) Pesos (para cuadre de galonaje)
         bruto = _parse_decimal_or_none(request_form.get('peso_bruto_kg'))
         tara = _parse_decimal_or_none(request_form.get('tara_kg'))
@@ -4209,6 +4729,8 @@ def cancelar_embarque(id_embarque):
         if emb.estatus != 'cancelado':
             # Devolver al inventario los galones que este embarque había descontado.
             _revertir_salida_inventario_embarque(emb)
+            # Eliminar el lote de mezcla (INVOCA) y sus componentes.
+            _eliminar_lote_mezcla(emb)
         emb.estatus = 'cancelado'
         emb.actualizado_por = current_user.id_usuario
         db.session.commit()

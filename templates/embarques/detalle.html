@@ -230,6 +230,56 @@
             </div>
         </div>
 
+        {# ================= LOTE DE MEZCLA (PIPAS) #}
+        {% set mezcla = emb.lote_mezcla %}
+        {% if mezcla %}
+        <div class="card shadow mb-4">
+            <div class="card-header bg-light fw-semibold">
+                <i class="bi bi-shuffle me-1"></i>Lote de mezcla (INVOCA)
+            </div>
+            <div class="card-body">
+                <div class="row g-3 mb-3">
+                    <div class="col-md-3">
+                        <div class="small text-muted">Código</div>
+                        <div class="fw-semibold"><code>{{ mezcla.codigo_lote }}</code></div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="small text-muted">°Brix</div>
+                        <div class="fw-semibold">{{ '{:,.2f}'.format(mezcla.brix) if mezcla.brix is not none else '-' }}</div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="small text-muted">Relación</div>
+                        <div class="fw-semibold">{{ '{:,.2f}'.format(mezcla.relacion) if mezcla.relacion is not none else '-' }}</div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="small text-muted">% Pulpa</div>
+                        <div class="fw-semibold">{{ '{:,.2f}'.format(mezcla.pulpa) if mezcla.pulpa is not none else '-' }}</div>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light small text-muted">
+                            <tr>
+                                <th>Lote de origen</th>
+                                <th class="text-end">Galones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for c in emb.componentes_mezcla %}
+                            <tr>
+                                <td><code>{{ c.lote_origen.codigo_lote if c.lote_origen else c.id_lote_origen }}</code></td>
+                                <td class="text-end">{{ '{:,.2f}'.format(c.galones) }}</td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="2" class="text-center text-muted py-3">Sin componentes.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
         {# ================= UNIDAD Y TRANSPORTE #}
         <div class="card shadow mb-4">
             <div class="card-header bg-light fw-semibold">

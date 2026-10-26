@@ -1,0 +1,35 @@
+[33mcommit fed2f6acb7594a47c22ceadc4f9c7c34d389abfa[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m
+Author: JoelRmz30 <joelramirezcruz816@gmail.com>
+Date:   Fri Oct 16 09:25:10 2026 -0600
+
+    activacion de embarques
+
+[33mcommit f18cc2ca0156c7836886ff1c938b7b71e55f7212[m
+Author: JoelRmz30 <joelramirezcruz816@gmail.com>
+Date:   Tue Oct 13 17:51:34 2026 -0600
+
+    Cambios de rol
+
+[33mcommit d506dfd3f559c51de21279de26068f72b42d75db[m
+Author: JoelRmz30 <joelramirezcruz816@gmail.com>
+Date:   Tue Oct 13 14:55:45 2026 -0600
+
+    Actualizacion de requerimoentos
+
+[33mcommit a6d69e06c8175c2bb513bbb5215ef6b6a092a5da[m
+Author: JoelRmz30 <joelramirezcruz816@gmail.com>
+Date:   Tue Oct 13 14:54:47 2026 -0600
+
+    feat: add csrf protection, update app config and project setup
+    
+    Implement complete CSRF protection for the Flask application: generate CSRF tokens, inject into all Jinja templates, and validate tokens for POST/PUT/PATCH/DELETE requests.
+    Update application configuration to properly use environment variables for all critical settings: secret key, database URL, port, and debug mode.
+    Add .env.example template and .gitignore file for standardized environment setup.
+    Add missing CSRF hidden inputs to all HTML form templates across the application.
+    Clean up temporary test scripts and cached pycache files.
+
+[33mcommit ccc6b48aecabedce4b00320ce00007baf21850a8[m
+Author: JoelRmz30 <joelramirezcruz816@gmail.com>
+Date:   Tue Oct 6 14:46:57 2026 -0600
+
+    primer commit del sistema

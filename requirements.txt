@@ -9,3 +9,4 @@ pandas==2.2.2
 openpyxl==3.1.2
 ReportLab==4.2.0
 cryptography==42.0.5
+pytest==9.1.1
