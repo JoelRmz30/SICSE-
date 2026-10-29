@@ -22,9 +22,14 @@
                 <h5 class="mb-0">
                     <i class="bi bi-thermometer-half me-2"></i>Inventario TQPF
                 </h5>
-                <span class="badge bg-light text-dark">
-                    Total: {{ '%.2f'|format(total_general) }} gal
-                </span>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="badge bg-light text-dark">
+                        Total: {{ '%.2f'|format(total_general) }} gal
+                    </span>
+                    <a href="{{ url_for('purgas_tqpf') }}" class="btn btn-sm btn-outline-light">
+                        <i class="bi bi-funnel me-1"></i>Ver purgas
+                    </a>
+                </div>
             </div>
             <div class="card-body pt-3">
                 <p class="text-muted small mb-0">
@@ -216,11 +221,18 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
             </div>
             <div class="modal-body">
-                <p class="small text-muted mb-3">
+                <p class="small text-muted mb-2">
                     Tanque <strong id="tr-tanque">-</strong> ·
                     Lote <strong id="tr-lote">-</strong> ·
                     Disponible <strong id="tr-disponible">-</strong> gal
                 </p>
+                <div class="alert alert-warning py-2 small mb-3">
+                    <i class="bi bi-exclamation-triangle me-1"></i>
+                    Purga de la línea: <strong>{{ tambores_purga|int }} tambores</strong>
+                    ({{ '%.2f'|format(galones_purga) }} gal).
+                    El tanque descuenta los galones que llegan al silo <strong>más</strong>
+                    la purga. Máximo traspasable: <strong id="tr-max">-</strong> gal.
+                </div>
                 <div class="mb-3">
                     <label class="form-label" for="tr-id_silo">Silo destino <span class="text-danger">*</span></label>
                     <select class="form-select" id="tr-id_silo" name="id_silo" required>
@@ -247,7 +259,7 @@
                     <div class="col-md-6">
                         <label class="form-label" for="tr-galones">Galones a traspasar <span class="text-danger">*</span></label>
                         <input type="number" step="0.01" min="0.01" class="form-control" id="tr-galones" name="galones" required>
-                        <div class="form-text">Puede ser parcial (menor o igual al disponible).</div>
+                        <div class="form-text">Puede ser parcial. Al silo llegan estos galones; el tanque baja además la purga.</div>
                     </div>
                 </div>
                 <div class="mt-3">
@@ -267,19 +279,24 @@
 {% endif %}
 
 <script>
+    // Galones de purga que se descuentan del tanque (configurables en el sistema).
+    var PURGA_GALONES = {{ galones_purga|float }};
     // Rellena el modal de traspaso con los datos del lote seleccionado.
     // Bootstrap 5 abre el modal automáticamente (data-bs-toggle) y aquí solo
-    // se rellenan los campos con la información de la fila.
+    // se rellenan los campos con la información de la fila. El máximo
+    // traspasable es el disponible menos la purga de la línea.
     document.querySelectorAll('.btn-traspaso').forEach(function (btn) {
         btn.addEventListener('click', function () {
             var galones = parseFloat(this.dataset.galones || '0');
+            var maximo = Math.max(galones - PURGA_GALONES, 0);
             document.getElementById('tr-id_inventario_tqpf').value = this.dataset.id;
             document.getElementById('tr-tanque').textContent = this.dataset.tanque;
             document.getElementById('tr-lote').textContent = this.dataset.lote;
             document.getElementById('tr-disponible').textContent = galones.toFixed(2);
+            document.getElementById('tr-max').textContent = maximo.toFixed(2);
             var inputGalones = document.getElementById('tr-galones');
-            inputGalones.max = galones;
-            inputGalones.value = galones.toFixed(2);
+            inputGalones.max = maximo;
+            inputGalones.value = maximo.toFixed(2);
         });
     });
 </script>

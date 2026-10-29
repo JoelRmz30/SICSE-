@@ -325,7 +325,7 @@ CREATE TABLE inventario_tqpf (
 );
 CREATE TABLE movimientos (
 	id_movimiento INTEGER NOT NULL AUTO_INCREMENT, 
-	tipo_movimiento ENUM('entrada','salida','ajuste','reproceso','cambio_estado','entrada_tqpf','traspaso_tqpf_silo'), 
+	tipo_movimiento ENUM('entrada','salida','ajuste','reproceso','cambio_estado','entrada_tqpf','traspaso_tqpf_silo','purga'), 
 	id_silo INTEGER, 
 	id_lote INTEGER, 
 	id_tanque INTEGER, 

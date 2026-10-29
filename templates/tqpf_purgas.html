@@ -1,0 +1,119 @@
+{# ==========================================================================
+   Control de purgas TQPF.
+
+   Muestra los movimientos de tipo `purga`: los tambores de producto que se
+   pierden en la línea al traspasar de un tanque de pared fría (TQPF) a un
+   silo. El tanque descuenta esos galones además de los que llegan al silo.
+   Permite filtrar por tanque y rango de fechas y muestra el total de galones
+   y de tambores purgados.
+   ========================================================================== #}
+{% extends "base.html" %}
+{% block title %}Purgas TQPF{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-xl-11 col-lg-12">
+
+        {# Encabezado con totales #}
+        <div class="card shadow mb-4">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <h5 class="mb-0"><i class="bi bi-funnel me-2"></i>Control de purgas</h5>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="badge bg-light text-dark">
+                        Total: {{ '%.2f'|format(total_galones) }} gal
+                    </span>
+                    <span class="badge bg-light text-dark">
+                        ≈ {{ '%.2f'|format(total_tambores) }} tambores
+                    </span>
+                </div>
+            </div>
+            <div class="card-body pt-3">
+                <p class="text-muted small mb-0">
+                    Purga = tambores de producto que se quedan en la línea al traspasar de un
+                    tanque TQPF a un silo. Se calcula con
+                    <strong>{{ '%.2f'|format(galones_tambor) }} gal/tambor</strong>
+                    y se descuenta del tanque además de los galones que llegan al silo.
+                </p>
+            </div>
+        </div>
+
+        {# Filtros #}
+        <div class="card shadow mb-4">
+            <div class="card-body">
+                <form method="GET" class="row g-3 align-items-end">
+                    <div class="col-md-4">
+                        <label for="id_tanque" class="form-label">Tanque</label>
+                        <select name="id_tanque" id="id_tanque" class="form-select">
+                            <option value="">Todos los tanques</option>
+                            {% for t in tanques %}
+                            <option value="{{ t.id_tanque }}" {{ 'selected' if request.args.get('id_tanque')|int == t.id_tanque else '' }}>
+                                {{ t.nombre_tanque }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label for="fecha_inicio" class="form-label">Desde</label>
+                        <input type="date" name="fecha_inicio" id="fecha_inicio" class="form-control"
+                               value="{{ request.args.get('fecha_inicio', '') }}">
+                    </div>
+                    <div class="col-md-3">
+                        <label for="fecha_fin" class="form-label">Hasta</label>
+                        <input type="date" name="fecha_fin" id="fecha_fin" class="form-control"
+                               value="{{ request.args.get('fecha_fin', '') }}">
+                    </div>
+                    <div class="col-md-2 d-flex gap-2">
+                        <button type="submit" class="btn btn-primary w-100">
+                            <i class="bi bi-search me-1"></i>Filtrar
+                        </button>
+                        <a href="{{ url_for('purgas_tqpf') }}" class="btn btn-outline-secondary">Limpiar</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        {# Listado de purgas #}
+        <div class="card shadow mb-4">
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover align-middle mb-0">
+                        <thead class="table-light small text-muted">
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Tanque</th>
+                                <th>Lote</th>
+                                <th class="text-end">Galones</th>
+                                <th>Usuario</th>
+                                <th>Observaciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for m in purgas %}
+                            <tr>
+                                <td class="small">
+                                    {{ m.fecha_movimiento.strftime('%d/%m/%Y %H:%M') if m.fecha_movimiento else '-' }}
+                                </td>
+                                <td>{{ m.tanque.nombre_tanque if m.tanque else '-' }}</td>
+                                <td>{{ m.lote.codigo_lote if m.lote else '-' }}</td>
+                                <td class="text-end">{{ '%.2f'|format(m.galones) if m.galones is not none else '-' }}</td>
+                                <td class="small">
+                                    {{ m.usuario.nombre if m.usuario else '-' }}
+                                </td>
+                                <td class="small text-muted">{{ m.observaciones or '' }}</td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="6" class="text-center text-muted py-3">
+                                    No hay purgas registradas con los filtros seleccionados.
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+{% endblock %}

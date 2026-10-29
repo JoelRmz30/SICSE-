@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS inventario_tqpf (
 -- Tabla: movimientos
 CREATE TABLE IF NOT EXISTS movimientos ( 
     id_movimiento INT AUTO_INCREMENT PRIMARY KEY, 
-    tipo_movimiento ENUM('entrada','salida','ajuste','reproceso','cambio_estado','entrada_tqpf','traspaso_tqpf_silo'), 
+    tipo_movimiento ENUM('entrada','salida','ajuste','reproceso','cambio_estado','entrada_tqpf','traspaso_tqpf_silo','purga'), 
     id_silo INT, 
     id_lote INT, 
     id_tanque INT, 
@@ -361,7 +361,9 @@ INSERT INTO parametros_sistema (clave, valor, descripcion) VALUES
     ('brix_max_concentrado', '72.0', 'Brix máximo para concentrado'),
     ('cuadre_tolerancia_pct', '1.0', 'Tolerancia porcentual para el cuadre de galonaje'),
     ('permitir_entrada_directa_silo', '1', 'Permite captura directa a silo sin pasar por TQPF (1 = permitido, 0 = sólo traspaso desde TQPF)'),
-    ('tqpf_ocupacion_alerta_pct', '90', 'Porcentaje de ocupación de un tanque TQPF a partir del cual se genera alerta')
+    ('tqpf_ocupacion_alerta_pct', '90', 'Porcentaje de ocupación de un tanque TQPF a partir del cual se genera alerta'),
+    ('galones_tambor', '52', 'Galones que contiene un tambor (usado para calcular la purga de línea)'),
+    ('tambores_purga_traspaso', '2', 'Tambores de producto que se descuentan como purga al traspasar de TQPF a silo')
 ON DUPLICATE KEY UPDATE clave=clave;
 
 -- ============================================================

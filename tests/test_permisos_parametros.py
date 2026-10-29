@@ -120,7 +120,8 @@ def test_invitado_no_puede_crear_embarques(app, ids, invitado_client, post, crea
 def test_capturista_puede_traspasar_de_tqpf_a_silo(
         app, ids, capturista_client, admin_client, post, entrada_tqpf):
     """El capturista es el rol que opera el traspaso TQPF -> Silo."""
-    entrada_tqpf(admin_client, ids['tqpf1'], '005-20250101-000904', 800)
+    # 904 = 800 al silo + 104 de purga (2 tambores x 52 gal).
+    entrada_tqpf(admin_client, ids['tqpf1'], '005-20250101-000904', 904)
     item = InventarioTQPF.query.first()
 
     resp = post(capturista_client, '/tqpf/traspaso', {

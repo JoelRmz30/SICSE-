@@ -156,14 +156,17 @@ class Movimiento(db.Model):
     """
     Modelo existente de movimientos de inventario.
     Tipos: entrada, salida, ajuste, reproceso, cambio_estado,
-           entrada_tqpf (lote que entra a un tanque de proceso) y
-           traspaso_tqpf_silo (lote que pasa de TQPF a un silo).
+           entrada_tqpf (lote que entra a un tanque de proceso),
+           traspaso_tqpf_silo (lote que pasa de TQPF a un silo) y
+           purga (tambores de producto que se pierden en la línea al traspasar
+           de TQPF a silo y que se descuentan del tanque).
     Reutilizado por embarque_lotes (vínculo opcional id_movimiento).
     """
     __tablename__ = 'movimientos'
     id_movimiento = db.Column(db.Integer, primary_key=True)
     tipo_movimiento = db.Column(db.Enum('entrada', 'salida', 'ajuste', 'reproceso',
-                                        'cambio_estado', 'entrada_tqpf', 'traspaso_tqpf_silo'))
+                                        'cambio_estado', 'entrada_tqpf', 'traspaso_tqpf_silo',
+                                        'purga'))
     id_silo = db.Column(db.Integer, db.ForeignKey('silos.id_silo'))
     id_lote = db.Column(db.Integer, db.ForeignKey('lotes.id_lote'))
     id_tanque = db.Column(db.Integer, db.ForeignKey('tanques_tqpf.id_tanque'), nullable=True)
@@ -1031,7 +1034,10 @@ class EmpaqueKit(db.Model):
 
 @login_manager.user_loader
 def load_user(user_id):
-    return Usuario.query.get(int(user_id))
+    try:
+        return db.session.get(Usuario, int(user_id))
+    except (TypeError, ValueError):
+        return None
 
 def _is_guest():
     if not current_user.is_authenticated:
@@ -1179,10 +1185,7 @@ def _validar_cantidad_por_um(raw, um, allow_negative=False):
     s = str(raw).strip()
     if s == '':
         return False, None, 'Cantidad faltante.'
-    try:
-        cantidad = _parse_decimal(s)
-    except Exception:
-        return False, None, 'Cantidad no es un número válido.'
+    cantidad = _parse_decimal_or_none(s)
     if cantidad is None:
         return False, None, 'Cantidad no es un número válido.'
     if not allow_negative and cantidad <= 0:
@@ -1263,15 +1266,22 @@ def _empaque_calcular_stock_batch(codigos):
     return resultado
 
 
-def _empaque_estado_desde_valores(stock_actual, fisico_dynamics, stock_minimo):
+def _empaque_estado_desde_valores(stock_actual, fisico_dynamics, diferencia_o_stock_minimo=None, stock_minimo=None):
     """
     Calcula el estado de un artículo a partir de sus valores numéricos.
     MISMA REGLA que EmpaqueArticulo.estado_articulo pero permite ser usada
     con el stock calculado en batch (evita N+1 queries en listados).
 
+    Compatibilidad:
+      - Firma nueva: (stock_actual, fisico_dynamics, stock_minimo)
+      - Firma legacy: (stock_actual, fisico_dynamics, diferencia, stock_minimo)
+        donde `diferencia` ya no se usa para decidir el estado.
+
     Devuelve: (clave, etiqueta, clase_color)
     """
     stock = Decimal(str(stock_actual)) if stock_actual is not None else Decimal('0')
+    if stock_minimo is None:
+        stock_minimo = diferencia_o_stock_minimo
     minimo = Decimal(str(stock_minimo)) if stock_minimo is not None else None
     fisico = Decimal(str(fisico_dynamics)) if fisico_dynamics is not None else None
 
@@ -1535,7 +1545,7 @@ def calcular_alertas():
             alertas.append({
                 'tipo': f'empaque_{clave}',
                 'severidad': severidad,
-                'clave_unica': f'empaque:{art.id_articulo}:{clave}',
+                'clave_unica': f'empaque:{art.codigo}:{clave}',
                 'mensaje': f'{art.nombre}: {etiqueta} (stock {_empaque_format_numero(stock, art.um)} {art.um}).',
                 'url': url_for('empaque_inventario'),
             })
@@ -2017,12 +2027,14 @@ def index():
         
         # Acumular estadísticas por cliente y estado
         for item in inventario:
+            lote = item.lote
+
             # Por cliente
             cliente_nombre = None
-            if item.lote.cliente:
-                cliente_nombre = item.lote.cliente.nombre_cliente
-            elif item.lote.cliente_manual:
-                cliente_nombre = item.lote.cliente_manual
+            if lote and lote.cliente:
+                cliente_nombre = lote.cliente.nombre_cliente
+            elif lote and lote.cliente_manual:
+                cliente_nombre = lote.cliente_manual
             else:
                 cliente_nombre = "Sin Cliente"
             
@@ -2038,7 +2050,10 @@ def index():
             clientes_silos_stats[cliente_nombre][silo_nombre] += float(item.galones)
             
             # Por estado
-            estado_nombre = item.lote.estado.nombre_estado
+            if lote and lote.estado:
+                estado_nombre = lote.estado.nombre_estado
+            else:
+                estado_nombre = 'Sin estado'
             if estado_nombre not in estados_stats:
                 estados_stats[estado_nombre] = 0.0
             estados_stats[estado_nombre] += float(item.galones)
@@ -2857,6 +2872,39 @@ def configurar_silos():
 # =====================================================================
 REGEX_CODIGO_LOTE = re.compile(r'^\d{3}-\d{8}-\d{6}$')
 
+# Valores por omisión de la purga al traspasar de TQPF a silo. Son
+# configurables desde parametros_sistema para poder ajustarlos sin tocar código.
+TAMBORES_PURGA_DEFAULT = 2.0
+GALONES_TAMBOR_DEFAULT = 52.0
+
+
+def _calcular_purga_traspaso():
+    """
+    Calcula la purga que se descuenta del tanque TQPF al traspasar a un silo.
+
+    La purga son los tambores de producto que se quedan en la tubería (el
+    producto que llena la línea antes de que el flujo llegue al silo) y que el
+    negocio considera merma. El acuerdo es que el tanque baje esos galones
+    ADEMÁS de los galones que sí llegan al silo.
+
+    Devuelve (tambores, galones_tambor, galones_purga). Los tres valores se
+    leen de parametros_sistema:
+
+      - `tambores_purga_traspaso`: cuántos tambores se descuentan (por omisión 2).
+      - `galones_tambor`: galones que tiene cada tambor (por omisión 52).
+
+    Si algún parámetro no existe o no es un número válido, se usan los valores
+    por omisión definidos en el módulo.
+    """
+    tambores = _get_parametro_float('tambores_purga_traspaso', TAMBORES_PURGA_DEFAULT)
+    galones_tambor = _get_parametro_float('galones_tambor', GALONES_TAMBOR_DEFAULT)
+    if tambores is None:
+        tambores = TAMBORES_PURGA_DEFAULT
+    if galones_tambor is None:
+        galones_tambor = GALONES_TAMBOR_DEFAULT
+    purga = Decimal(str(tambores)) * Decimal(str(galones_tambor))
+    return tambores, galones_tambor, purga
+
 
 def _renumerar_posiciones_tqpf(id_tanque):
     """Renumera 1..n las posiciones LIFO del inventario de un tanque TQPF."""
@@ -2995,9 +3043,58 @@ def inventario_tqpf():
     estados = EstadoProducto.query.all()
     clientes = Cliente.query.all()
     silos = Silo.query.filter_by(estado='activo').all()
+    # Datos de la purga para mostrarlos en el modal de traspaso.
+    tambores_purga, galones_tambor, galones_purga = _calcular_purga_traspaso()
     return render_template('tqpf.html', tanques=tanques, detalle=detalle,
                            total_general=total_general, estados=estados,
-                           clientes=clientes, silos=silos)
+                           clientes=clientes, silos=silos,
+                           tambores_purga=tambores_purga,
+                           galones_tambor=galones_tambor,
+                           galones_purga=galones_purga)
+
+
+@app.route('/tqpf/purgas')
+@login_required
+def purgas_tqpf():
+    """
+    Apartado de control de purgas.
+
+    Muestra los movimientos de tipo `purga`: los tambores de producto que se
+    pierden en la línea al traspasar de un tanque TQPF a un silo. Permite
+    filtrar por tanque y por rango de fechas y muestra el total de galones y de
+    tambores purgados, para llevar el control de la merma.
+    """
+    id_tanque = _parse_int_or_none(request.args.get('id_tanque'))
+    fecha_inicio = request.args.get('fecha_inicio')
+    fecha_fin = request.args.get('fecha_fin')
+
+    query = Movimiento.query.filter_by(tipo_movimiento='purga')
+    if id_tanque:
+        query = query.filter_by(id_tanque=id_tanque)
+    if fecha_inicio:
+        try:
+            query = query.filter(Movimiento.fecha_movimiento >=
+                                 datetime.strptime(fecha_inicio, '%Y-%m-%d'))
+        except ValueError:
+            fecha_inicio = None
+    if fecha_fin:
+        try:
+            dt_fin = datetime.strptime(fecha_fin, '%Y-%m-%d') + timedelta(days=1)
+            query = query.filter(Movimiento.fecha_movimiento < dt_fin)
+        except ValueError:
+            fecha_fin = None
+
+    purgas = query.order_by(Movimiento.fecha_movimiento.desc()).all()
+    total_galones = sum((Decimal(str(m.galones or 0)) for m in purgas), Decimal('0'))
+
+    _, galones_tambor, _ = _calcular_purga_traspaso()
+    galones_tambor = Decimal(str(galones_tambor or 0))
+    total_tambores = (total_galones / galones_tambor) if galones_tambor > 0 else Decimal('0')
+
+    tanques = TanqueTQPF.query.order_by(TanqueTQPF.nombre_tanque).all()
+    return render_template('tqpf_purgas.html', purgas=purgas, tanques=tanques,
+                           total_galones=total_galones, total_tambores=total_tambores,
+                           galones_tambor=galones_tambor)
 
 
 @app.route('/tqpf/traspaso', methods=['POST'])
@@ -3031,8 +3128,18 @@ def traspasar_tqpf_silo():
             raise ValueError('Captura una cantidad de galones mayor a cero.')
 
         disponible = Decimal(str(item.galones or 0))
-        if galones > disponible:
-            raise ValueError(f'El tanque sólo tiene {float(disponible):.2f} gal de ese lote.')
+
+        # Purga: tambores de producto que se quedan en la línea. El tanque baja
+        # los galones que llegan al silo MÁS la purga, así que debe alcanzar
+        # para ambos conceptos.
+        tambores_purga, galones_tambor, galones_purga = _calcular_purga_traspaso()
+        total_tanque = galones + galones_purga
+        if total_tanque > disponible:
+            raise ValueError(
+                f'El tanque sólo tiene {float(disponible):.2f} gal de ese lote. '
+                f'Traspasar {float(galones):.2f} gal requiere {float(total_tanque):.2f} gal '
+                f'incluyendo la purga de {tambores_purga:g} tambores '
+                f'({float(galones_purga):.2f} gal).')
 
         # Mismas validaciones que la entrada al silo.
         silo, _g_act, err_silo = _preparar_entrada_silo(id_silo, tipo_producto, galones)
@@ -3044,11 +3151,12 @@ def traspasar_tqpf_silo():
         id_lote = item.id_lote
         codigo_lote = item.lote.codigo_lote if item.lote else id_lote
 
-        # 1) Descontar del tanque (y eliminar la fila si queda en cero).
-        if galones >= disponible:
+        # 1) Descontar del tanque (galones al silo + purga) y eliminar la fila
+        #    si queda en cero.
+        if total_tanque >= disponible:
             db.session.delete(item)
         else:
-            item.galones = disponible - galones
+            item.galones = disponible - total_tanque
         db.session.flush()
         _renumerar_posiciones_tqpf(id_tanque)
 
@@ -3069,7 +3177,7 @@ def traspasar_tqpf_silo():
             ))
         db.session.flush()
 
-        # 3) Movimientos: traspaso (tanque) y entrada (silo).
+        # 3) Movimientos: traspaso (tanque), entrada (silo) y purga (merma).
         obs = f'Traspaso {tanque.nombre_tanque} -> {silo.nombre_silo} (Lote {codigo_lote})'
         if observaciones:
             obs = f'{obs}. {observaciones}'
@@ -3090,9 +3198,26 @@ def traspasar_tqpf_silo():
             id_usuario=current_user.id_usuario,
             observaciones=obs,
         ))
+        # Purga: tambores que se pierden en la línea y que también bajan del
+        # tanque. Se guarda como movimiento propio para poder llevar su control.
+        if galones_purga > 0:
+            db.session.add(Movimiento(
+                tipo_movimiento='purga',
+                id_tanque=id_tanque,
+                id_lote=id_lote,
+                galones=galones_purga,
+                id_usuario=current_user.id_usuario,
+                observaciones=(
+                    f'Purga de {tambores_purga:g} tambores '
+                    f'({float(galones_tambor):.2f} gal/tambor) al traspasar '
+                    f'{tanque.nombre_tanque} -> {silo.nombre_silo} (Lote {codigo_lote}).'
+                ),
+            ))
         db.session.commit()
         flash(f'Se traspasaron {float(galones):.2f} gal del lote {codigo_lote} '
-              f'de {tanque.nombre_tanque} a {silo.nombre_silo}.', 'success')
+              f'de {tanque.nombre_tanque} a {silo.nombre_silo}. '
+              f'Se descontaron {float(galones_purga):.2f} gal de purga '
+              f'({tambores_purga:g} tambores).', 'success')
     except ValueError as e:
         db.session.rollback()
         flash(f'Error: {e}', 'danger')
@@ -5435,7 +5560,7 @@ def empaque_resumen():
     stock_map, _dyn_map, _dif_map = {}, {}, {}
     if articulos_todos:
         cods = [a.codigo for a in articulos_todos]
-        stock_map = _calcular_stock_batch(cods)
+        stock_map = _empaque_calcular_stock_batch(cods)
 
     # KPIs y atención
     kpis = {
@@ -5451,7 +5576,7 @@ def empaque_resumen():
         dyn = a.fisico_dynamics
         dif = (stock - dyn) if dyn is not None else None
         minimo = a.stock_minimo if a.stock_minimo is not None else 0
-        clave, etiq, color = _estado_desde_valores(stock, dyn, dif, minimo)
+        clave, etiq, color = _empaque_estado_desde_valores(stock, dyn, minimo)
         if clave in {'neg_dynamics', 'sin_stock'}:
             kpis['negativos_sin_stock'] += 1
             atencion_puntajes.append((0, a.codigo, clave, etiq, color, stock, dyn, dif, minimo))
@@ -5586,7 +5711,7 @@ def empaque_inventario():
     stock_map, dynamics_map, diferencia_map = {}, {}, {}
     if articulos_raw:
         cods = [a.codigo for a in articulos_raw]
-        stock_map = _calcular_stock_batch(cods)
+        stock_map = _empaque_calcular_stock_batch(cods)
         for a in articulos_raw:
             dynamics_map[a.codigo] = a.fisico_dynamics
             if a.fisico_dynamics is None:
@@ -5609,7 +5734,7 @@ def empaque_inventario():
         dyn = dynamics_map.get(a.codigo)
         dif = diferencia_map.get(a.codigo)
         minimo = a.stock_minimo if a.stock_minimo is not None else 0
-        clave, _etiq, _color = _estado_desde_valores(stock, dyn, dif, minimo)
+        clave, _etiq, _color = _empaque_estado_desde_valores(stock, dyn, minimo)
         if q_estado == 'todos' or clave in estados_visibles.get(q_estado, set()):
             articulos.append(a)
 
@@ -6404,11 +6529,27 @@ def empaque_carga_masiva_articulos():
 
     try:
         df = pd.read_excel(archivo, dtype=str)
-        # Normaliza nombres de columnas (quita espacios, pasa a minúsculas para comparar
-        # pero luego usamos la columna correcta).
         df.columns = [str(c).strip() for c in df.columns]
-        cols_necesarias = ['codigo', 'nombre', 'UM']
-        faltan = [c for c in cols_necesarias if c not in df.columns]
+        cols_norm = {_empaque_normalizar_clave_importacion(c): c for c in df.columns}
+        col_codigo = _empaque_resolver_columna(cols_norm, 'codigo', 'código', 'numero de articulo', 'numero de artículo')
+        col_nombre = _empaque_resolver_columna(cols_norm, 'nombre', 'nombre del producto', 'producto')
+        col_um = _empaque_resolver_columna(cols_norm, 'um')
+        col_almacen = _empaque_resolver_columna(cols_norm, 'almacen', 'almacén')
+        col_categoria = _empaque_resolver_columna(cols_norm, 'categoria', 'categoría')
+        col_stock_minimo = _empaque_resolver_columna(cols_norm, 'stock minimo', 'stock mínimo')
+        col_fisico = _empaque_resolver_columna(
+            cols_norm,
+            'fisico_dynamics', 'físico_dynamics', 'inventario fisico actual',
+            'inventario fisico', 'inventario fis', 'fisico', 'físico'
+        )
+        col_activo = _empaque_resolver_columna(cols_norm, 'activo')
+        faltan = []
+        if not col_codigo:
+            faltan.append('codigo / Número de artículo')
+        if not col_nombre:
+            faltan.append('nombre / Nombre del producto')
+        if not col_um:
+            faltan.append('UM')
         if faltan:
             flash(f'Faltan columnas obligatorias: {", ".join(faltan)}', 'danger')
             return redirect(url_for('empaque_catalogo', seccion='carga_masiva'))
@@ -6429,14 +6570,14 @@ def empaque_carga_masiva_articulos():
         n_fila = idx + 2   # +1 por encabezado, +1 base 1
         # Limpiar celdas
         vals = {c: (str(row[c]).strip() if pd.notna(row[c]) else '') for c in df.columns}
-        codigo = vals.get('codigo', '').upper()
-        nombre = _validar_y_normalizar_texto(vals.get('nombre'), mayusculas=False) or ''
-        categoria_nombre = vals.get('categoria', '').strip()
-        um = vals.get('UM', '').strip()
-        almacen = vals.get('almacen', '').strip() or 'CP005'
-        sm = vals.get('stock_minimo', '').strip()
-        fd = vals.get('fisico_dynamics', '').strip()
-        activo_raw = vals.get('activo', '1').strip()
+        codigo = (vals.get(col_codigo, '') or '').upper()
+        nombre = _validar_y_normalizar_texto(vals.get(col_nombre), mayusculas=False) or ''
+        categoria_nombre = (vals.get(col_categoria, '') if col_categoria else '').strip()
+        um = (vals.get(col_um, '') or '').strip().title()
+        almacen = ((vals.get(col_almacen, '') if col_almacen else '').strip() or 'CP005')
+        sm = (vals.get(col_stock_minimo, '') if col_stock_minimo else '').strip()
+        fd = (vals.get(col_fisico, '') if col_fisico else '').strip()
+        activo_raw = (vals.get(col_activo, '1') if col_activo else '1').strip()
 
         errores = []
         # Código
@@ -6465,7 +6606,7 @@ def empaque_carga_masiva_articulos():
         stock_minimo = None
         if sm:
             try:
-                d = Decimal(sm)
+                d = _empaque_parse_decimal_importacion(sm)
                 if d < 0:
                     errores.append('stock_minimo no puede ser negativo.')
                 else:
@@ -6476,7 +6617,7 @@ def empaque_carga_masiva_articulos():
         fisico_dynamics = None
         if fd:
             try:
-                fisico_dynamics = Decimal(fd)
+                fisico_dynamics = _empaque_parse_decimal_importacion(fd)
             except Exception:
                 errores.append('fisico_dynamics no es numérico.')
         # Activo
@@ -6646,11 +6787,39 @@ def empaque_carga_masiva_movimientos():
     try:
         df = pd.read_excel(archivo, dtype=str)
         df.columns = [str(c).strip() for c in df.columns]
+        cols_norm = {_empaque_normalizar_clave_importacion(c): c for c in df.columns}
         if tipo == 'entradas':
-            cols_necesarias = ['codigo', 'cantidad', 'fecha', 'proveedor']
+            col_codigo = _empaque_resolver_columna(cols_norm, 'codigo', 'código', 'numero de articulo', 'numero de artículo')
+            col_cantidad = _empaque_resolver_columna(cols_norm, 'cantidad', 'entradas', 'entrada')
+            col_fecha = _empaque_resolver_columna(cols_norm, 'fecha', 'fecha entrada')
+            col_proveedor = _empaque_resolver_columna(cols_norm, 'proveedor')
+            col_rechazos = _empaque_resolver_columna(cols_norm, 'rechazos', 'rechazo')
+            col_comentario = _empaque_resolver_columna(cols_norm, 'comentario', 'comentarios')
+            faltan = []
+            if not col_codigo:
+                faltan.append('codigo / Número de artículo')
+            if not col_cantidad:
+                faltan.append('cantidad / Entradas')
+            if not col_fecha:
+                faltan.append('fecha / Fecha Entrada')
+            if not col_proveedor:
+                faltan.append('proveedor / Proveedor')
         else:
-            cols_necesarias = ['codigo', 'cantidad', 'fecha', 'area']
-        faltan = [c for c in cols_necesarias if c not in df.columns]
+            col_codigo = _empaque_resolver_columna(cols_norm, 'codigo', 'código')
+            col_cantidad = _empaque_resolver_columna(cols_norm, 'cantidad')
+            col_fecha = _empaque_resolver_columna(cols_norm, 'fecha')
+            col_area = _empaque_resolver_columna(cols_norm, 'area', 'área')
+            col_lote = _empaque_resolver_columna(cols_norm, 'lote')
+            col_comentario = _empaque_resolver_columna(cols_norm, 'comentario', 'comentarios')
+            faltan = []
+            if not col_codigo:
+                faltan.append('codigo')
+            if not col_cantidad:
+                faltan.append('cantidad')
+            if not col_fecha:
+                faltan.append('fecha')
+            if not col_area:
+                faltan.append('area')
         if faltan:
             flash(f'Faltan columnas obligatorias: {", ".join(faltan)}', 'danger')
             return redirect(url_for('empaque_catalogo', seccion='carga_masiva') + '#sec-carga_masiva')
@@ -6660,8 +6829,8 @@ def empaque_carga_masiva_movimientos():
 
     # Precacheos
     articulos_db = {a.codigo: a for a in EmpaqueArticulo.query.all()}
-    proveedores_db = {p.nombre: p.id_proveedor for p in EmpaqueProveedor.query.all()}
-    areas_db = {a.nombre: a for a in EmpaqueArea.query.all()}
+    proveedores_db = {_empaque_normalizar_nombre_importacion(p.nombre): p.id_proveedor for p in EmpaqueProveedor.query.all()}
+    areas_db = {_empaque_normalizar_nombre_importacion(a.nombre): a for a in EmpaqueArea.query.all()}
     lotes_db = {l.codigo_lote: l.id_lote for l in Lote.query.all()}
     fecha_hoy = date.today()
     # Stock acumulativo para validar salidas secuencialmente contra la nueva carga
@@ -6682,7 +6851,7 @@ def empaque_carga_masiva_movimientos():
         errores = []
         fila_base = {'fila': n_fila}
         # Comunes
-        codigo = vals.get('codigo', '').strip()
+        codigo = (vals.get(col_codigo, '') or '').strip().upper()
         art = articulos_db.get(codigo)
         if not art:
             errores.append(f'Artículo "{codigo}" no existe en el catálogo.')
@@ -6696,20 +6865,21 @@ def empaque_carga_masiva_movimientos():
         # Cantidad
         cantidad = None
         try:
-            cantidad = Decimal(vals.get('cantidad', '0') or '0')
+            cantidad = _empaque_parse_decimal_importacion(vals.get(col_cantidad, '0') or '0')
         except Exception:
             errores.append('Cantidad no es numérica.')
         if cantidad is not None and cantidad <= 0:
             errores.append('Cantidad debe ser mayor a cero.')
-        fila_base['cantidad'] = vals.get('cantidad', '') or ''
+        fila_base['cantidad'] = vals.get(col_cantidad, '') or ''
 
         # Fecha
-        fecha = _parse_date_or_none(vals.get('fecha', ''))
+        fecha = _empaque_parse_fecha_importacion(vals.get(col_fecha, ''))
         if not fecha:
-            errores.append('Fecha inválida (esperado YYYY-MM-DD).')
+            errores.append('Fecha inválida.')
         elif fecha > fecha_hoy:
             errores.append('Fecha futura no permitida.')
-        fila_base['fecha'] = vals.get('fecha', '') or ''
+        fila_base['fecha'] = vals.get(col_fecha, '') or ''
+        fila_base['_fecha_iso'] = fecha.isoformat() if fecha else None
 
         # Validar cantidad por UM
         if cantidad is not None and art:
@@ -6719,8 +6889,8 @@ def empaque_carga_masiva_movimientos():
         fila_base['_cantidad'] = float(cantidad) if cantidad is not None else None
 
         if tipo == 'entradas':
-            prov_nombre = vals.get('proveedor', '').strip()
-            id_proveedor = proveedores_db.get(prov_nombre)
+            prov_nombre = (vals.get(col_proveedor, '') or '').strip()
+            id_proveedor = proveedores_db.get(_empaque_normalizar_nombre_importacion(prov_nombre))
             fila_base['proveedor'] = prov_nombre
             if not prov_nombre:
                 errores.append('Proveedor vacío.')
@@ -6729,10 +6899,10 @@ def empaque_carga_masiva_movimientos():
             else:
                 fila_base['_id_proveedor'] = id_proveedor
 
-            rechazos_raw = vals.get('rechazos', '0').strip() or '0'
+            rechazos_raw = ((vals.get(col_rechazos, '0') if col_rechazos else '0') or '0').strip() or '0'
             fila_base['rechazos'] = rechazos_raw
             try:
-                rechazos = Decimal(rechazos_raw)
+                rechazos = _empaque_parse_decimal_importacion(rechazos_raw)
                 if rechazos < 0:
                     errores.append('Rechazos no puede ser negativo.')
                 elif cantidad is not None and rechazos > cantidad:
@@ -6741,12 +6911,12 @@ def empaque_carga_masiva_movimientos():
             except Exception:
                 errores.append('Rechazos no es numérico.')
 
-            fila_base['comentario'] = vals.get('comentario', '') or ''
+            fila_base['comentario'] = (vals.get(col_comentario, '') if col_comentario else '') or ''
 
         else:  # salidas
-            area_nombre = vals.get('area', '').strip()
+            area_nombre = (vals.get(col_area, '') or '').strip()
             fila_base['area'] = area_nombre
-            area = areas_db.get(area_nombre)
+            area = areas_db.get(_empaque_normalizar_nombre_importacion(area_nombre))
             if not area_nombre:
                 errores.append('Área vacía.')
             elif not area:
@@ -6754,7 +6924,7 @@ def empaque_carga_masiva_movimientos():
             else:
                 fila_base['_id_area'] = area.id_area
                 # Lote obligatorio si área es Pulpa
-                lote_codigo = vals.get('lote', '').strip()
+                lote_codigo = ((vals.get(col_lote, '') if col_lote else '') or '').strip()
                 fila_base['lote'] = lote_codigo
                 if area.nombre.lower() == 'pulpa':
                     if not lote_codigo:
@@ -6767,7 +6937,7 @@ def empaque_carga_masiva_movimientos():
                     if lote_codigo:
                         errores.append(f'Solo se permite lote cuando el área es Pulpa.')
                     fila_base['_id_lote'] = None
-                fila_base['comentario'] = vals.get('comentario', '') or ''
+                fila_base['comentario'] = (vals.get(col_comentario, '') if col_comentario else '') or ''
 
                 # Stock suficiente (stock actual - salidas validadas previas)
                 if cantidad is not None and art:
@@ -6838,7 +7008,7 @@ def empaque_carga_masiva_movimientos_aplicar(tipo):
                     obj = EmpaqueEntrada(
                         codigo=f['codigo'],
                         cantidad=Decimal(str(f['_cantidad'])),
-                        fecha=_parse_date_or_none(f['fecha']) or date.today(),
+                        fecha=_parse_date_or_none(f.get('_fecha_iso')) or date.today(),
                         id_proveedor=f['_id_proveedor'],
                         rechazos=Decimal(str(f.get('_rechazos') or 0)),
                         comentario=f.get('comentario') or None,
@@ -6858,7 +7028,7 @@ def empaque_carga_masiva_movimientos_aplicar(tipo):
                     obj = EmpaqueSalida(
                         codigo=f['codigo'],
                         cantidad=Decimal(str(f['_cantidad'])),
-                        fecha=_parse_date_or_none(f['fecha']) or date.today(),
+                        fecha=_parse_date_or_none(f.get('_fecha_iso')) or date.today(),
                         id_area=f['_id_area'],
                         id_lote=f.get('_id_lote'),
                         comentario=f.get('comentario') or None,
@@ -6910,6 +7080,105 @@ def empaque_carga_masiva_movimientos_rechazados(tipo):
 # ---------------------------------------------------------------------
 # Conciliación Dynamics + Ajustes + Exportación
 # ---------------------------------------------------------------------
+def _empaque_normalizar_clave_importacion(texto):
+    """
+    Normaliza encabezados o llaves de archivos Excel para compararlos.
+
+    Convierte a minúsculas, quita acentos, reemplaza guiones bajos por
+    espacios y colapsa espacios repetidos.
+    """
+    s = str(texto or '').strip().lower()
+    reemplazos = str.maketrans('áéíóúüñ', 'aeiouun')
+    s = s.translate(reemplazos).replace('_', ' ')
+    s = re.sub(r'\s+', ' ', s)
+    return s
+
+
+def _empaque_normalizar_nombre_importacion(texto):
+    """
+    Normaliza el nombre del artículo para búsquedas por nombre.
+
+    Se usa en conciliación cuando el archivo real no trae `código` y sólo
+    identifica al artículo por "Nombre del producto".
+    """
+    return _empaque_normalizar_clave_importacion(texto)
+
+
+def _empaque_resolver_columna(cols_norm, *aliases):
+    """Devuelve el nombre real de la primera columna cuyo alias exista."""
+    for alias in aliases:
+        col = cols_norm.get(_empaque_normalizar_clave_importacion(alias))
+        if col:
+            return col
+    return None
+
+
+def _empaque_parse_decimal_importacion(valor):
+    """
+    Convierte números provenientes de Excel a Decimal.
+
+    Soporta:
+      - celdas vacías / "sin dato" -> None
+      - separador de miles con coma: 15,504 -> Decimal('15504')
+      - valores negativos: -70
+    """
+    if valor is None:
+        return None
+    s = str(valor).strip()
+    if _empaque_normalizar_clave_importacion(s) in ('', 'sin dato', 'n/a', 'null', 'none', '—', '-'):
+        return None
+    s = s.replace(',', '').replace(' ', '')
+    return Decimal(s)
+
+
+def _empaque_parse_fecha_importacion(valor):
+    """
+    Convierte fechas de importación de empaque a `date`.
+
+    Soporta:
+      - YYYY-MM-DD
+      - DD/MM/YYYY
+      - "30 de septiembre de 2025"
+      - "04 DE MARZO DEL 2026"
+    """
+    if valor is None:
+        return None
+    texto = str(valor).strip()
+    if not texto:
+        return None
+
+    fecha = _parse_date_or_none(texto)
+    if fecha:
+        return fecha
+
+    for fmt in ('%d/%m/%Y', '%d-%m-%Y'):
+        try:
+            return datetime.strptime(texto, fmt).date()
+        except Exception:
+            pass
+
+    t = _empaque_normalizar_clave_importacion(texto)
+    t = re.sub(r'\bdel\b', 'de', t)
+    t = re.sub(r'\s+', ' ', t).strip()
+    meses = {
+        'enero': '01', 'febrero': '02', 'marzo': '03', 'abril': '04',
+        'mayo': '05', 'junio': '06', 'julio': '07', 'agosto': '08',
+        'septiembre': '09', 'setiembre': '09', 'octubre': '10',
+        'noviembre': '11', 'diciembre': '12',
+    }
+    m = re.match(r'^(\d{1,2}) de ([a-z]+) de (\d{4})$', t)
+    if not m:
+        return None
+    dia, mes_txt, anio = m.groups()
+    mes = meses.get(mes_txt)
+    if not mes:
+        return None
+    try:
+        return datetime.strptime(f'{anio}-{mes}-{int(dia):02d}', '%Y-%m-%d').date()
+    except Exception:
+        return None
+
+
 @app.route('/embarques/empaque/conciliacion', methods=['GET', 'POST'])
 @login_required
 def empaque_conciliacion():
@@ -6929,32 +7198,76 @@ def empaque_conciliacion():
         except Exception as exc:
             flash(f'No se pudo leer el archivo: {exc}', 'error')
             return redirect(url_for('empaque_catalogo', seccion='conciliacion'))
-        cols = {c.strip().lower(): c for c in df.columns}
-        col_cod = cols.get('codigo') or cols.get('código') or cols.get('code')
-        col_val = cols.get('físico_dynamics') or cols.get('fisico_dynamics') or cols.get('fisico') or cols.get('dynamics')
-        if not col_cod or not col_val:
-            flash('El archivo requiere columnas "código" y "físico_dynamics".', 'error')
+
+        # Soporta dos layouts:
+        # 1) Plantilla del sistema: código + físico_dynamics
+        # 2) Formato real del usuario: Nombre del producto + Almacén + UM +
+        #    Inventario Fisico Actual
+        cols = {_empaque_normalizar_clave_importacion(c): c for c in df.columns}
+        col_cod = cols.get('codigo') or cols.get('codigo articulo') or cols.get('code')
+        col_nombre = cols.get('nombre del producto') or cols.get('nombre') or cols.get('producto')
+        col_almacen = cols.get('almacen')
+        col_um = cols.get('um')
+        col_val = (
+            cols.get('fisico dynamics') or
+            cols.get('fisico') or
+            cols.get('dynamics') or
+            cols.get('inventario fisico actual') or
+            cols.get('inventario fisico')
+        )
+        usa_formato_real = bool(col_nombre and col_val)
+        if not col_val or (not col_cod and not usa_formato_real):
+            flash(
+                'El archivo requiere columnas "código" y "físico_dynamics", o el formato '
+                'real con "Nombre del producto", "Almacén", "UM" e "Inventario Fisico Actual".',
+                'error'
+            )
             return redirect(url_for('empaque_catalogo', seccion='conciliacion'))
+
+        articulos_por_nombre = {}
+        if usa_formato_real:
+            articulos_por_nombre = {
+                _empaque_normalizar_nombre_importacion(a.nombre): a
+                for a in EmpaqueArticulo.query.all()
+            }
+
         ok, fail = 0, []
         for idx, row in df.iterrows():
             fila_no = idx + 2
-            codigo = (row.get(col_cod) or '').strip()
+            codigo = (row.get(col_cod) or '').strip() if col_cod else ''
+            nombre = (row.get(col_nombre) or '').strip() if col_nombre else ''
+            almacen = (row.get(col_almacen) or '').strip() if col_almacen else ''
+            um = (row.get(col_um) or '').strip() if col_um else ''
             raw = (row.get(col_val) or '').strip()
-            art = EmpaqueArticulo.query.get(codigo) if codigo else None
+
+            art = None
+            if codigo:
+                art = db.session.get(EmpaqueArticulo, codigo)
+            elif usa_formato_real:
+                art = articulos_por_nombre.get(_empaque_normalizar_nombre_importacion(nombre))
+                if art and almacen and (art.almacen or '').strip().upper() != almacen.strip().upper():
+                    fail.append(
+                        f'Fila {fila_no}: almacén "{almacen}" no coincide con el artículo '
+                        f'"{nombre}" ({art.almacen}).'
+                    )
+                    continue
+                if art and um and (art.um or '').strip() != um.strip():
+                    fail.append(
+                        f'Fila {fila_no}: UM "{um}" no coincide con el artículo "{nombre}" ({art.um}).'
+                    )
+                    continue
+
             if not art:
-                fail.append(f'Fila {fila_no}: código "{codigo}" no existe.')
+                if codigo:
+                    fail.append(f'Fila {fila_no}: código "{codigo}" no existe.')
+                else:
+                    fail.append(f'Fila {fila_no}: producto "{nombre}" no existe en el catálogo.')
                 continue
-            if raw.lower() in ('', 'sin dato', 'n/a', 'null', 'none', '—'):
-                nuevo = None
-            else:
-                try:
-                    nuevo = _parse_decimal(raw)
-                except Exception:
-                    fail.append(f'Fila {fila_no}: valor "{raw}" no es numérico.')
-                    continue
-                if nuevo is None:
-                    fail.append(f'Fila {fila_no}: valor "{raw}" no es numérico.')
-                    continue
+            try:
+                nuevo = _empaque_parse_decimal_importacion(raw)
+            except Exception:
+                fail.append(f'Fila {fila_no}: valor "{raw}" no es numérico.')
+                continue
             if art.fisico_dynamics != nuevo:
                 art.fisico_dynamics = nuevo
                 art.actualizado_en = datetime.utcnow()
@@ -6964,6 +7277,8 @@ def empaque_conciliacion():
         if fail:
             msg += f' {len(fail)} fila(s) ignorada(s). Primero: {fail[0]}'
             session['empaque_conciliacion_rechazos'] = fail
+        else:
+            session.pop('empaque_conciliacion_rechazos', None)
         flash(msg, 'success' if ok else 'info')
     return redirect(url_for('empaque_catalogo', seccion='conciliacion'))
 
@@ -7026,14 +7341,14 @@ def empaque_exportar_inventario():
         return redirect(url_for('empaque_resumen'))
     articulos = EmpaqueArticulo.query.order_by(EmpaqueArticulo.nombre).all()
     cods = [a.codigo for a in articulos]
-    stock_map = _calcular_stock_batch(cods) if cods else {}
+    stock_map = _empaque_calcular_stock_batch(cods) if cods else {}
     rows = []
     for a in articulos:
         stock = stock_map.get(a.codigo, 0)
         dyn = a.fisico_dynamics
         dif = (stock - dyn) if dyn is not None else None
         minimo = a.stock_minimo if a.stock_minimo is not None else 0
-        _clave, etiq, _color = _estado_desde_valores(stock, dyn, dif, minimo)
+        _clave, etiq, _color = _empaque_estado_desde_valores(stock, dyn, minimo)
         rows.append({
             'Código': a.codigo,
             'Nombre': a.nombre,

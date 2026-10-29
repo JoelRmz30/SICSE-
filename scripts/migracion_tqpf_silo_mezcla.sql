@@ -22,16 +22,18 @@ USE sistema_silos;
 -- ============================================================
 -- Valores finales:
 --   entrada, salida, ajuste, reproceso, cambio_estado,
---   entrada_tqpf, traspaso_tqpf_silo
+--   entrada_tqpf, traspaso_tqpf_silo, purga
+-- Se verifica el valor más reciente ('purga') para cubrir tanto bases nuevas
+-- como bases que ya se migraron antes de existir la purga.
 SET @enum_ok = (
     SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_SCHEMA = DATABASE()
       AND TABLE_NAME = 'movimientos'
       AND COLUMN_NAME = 'tipo_movimiento'
-      AND COLUMN_TYPE LIKE '%entrada_tqpf%'
+      AND COLUMN_TYPE LIKE '%purga%'
 );
 SET @sql = IF(@enum_ok = 0,
-    'ALTER TABLE movimientos MODIFY COLUMN tipo_movimiento ENUM(''entrada'',''salida'',''ajuste'',''reproceso'',''cambio_estado'',''entrada_tqpf'',''traspaso_tqpf_silo'') NULL COMMENT ''Tipo de movimiento de inventario''',
+    'ALTER TABLE movimientos MODIFY COLUMN tipo_movimiento ENUM(''entrada'',''salida'',''ajuste'',''reproceso'',''cambio_estado'',''entrada_tqpf'',''traspaso_tqpf_silo'',''purga'') NULL COMMENT ''Tipo de movimiento de inventario''',
     'SELECT ''movimientos.tipo_movimiento ya incluye los tipos nuevos'' AS mensaje'
 );
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
@@ -264,6 +266,17 @@ INSERT INTO parametros_sistema (clave, valor, descripcion)
 SELECT 'tqpf_ocupacion_alerta_pct', '90',
        'Porcentaje de ocupación de un tanque TQPF a partir del cual se genera alerta'
 WHERE NOT EXISTS (SELECT 1 FROM parametros_sistema WHERE clave = 'tqpf_ocupacion_alerta_pct');
+
+-- Parámetros de la purga de línea (traspaso TQPF -> silo)
+INSERT INTO parametros_sistema (clave, valor, descripcion)
+SELECT 'galones_tambor', '52',
+       'Galones que contiene un tambor (usado para calcular la purga de línea)'
+WHERE NOT EXISTS (SELECT 1 FROM parametros_sistema WHERE clave = 'galones_tambor');
+
+INSERT INTO parametros_sistema (clave, valor, descripcion)
+SELECT 'tambores_purga_traspaso', '2',
+       'Tambores de producto que se descuentan como purga al traspasar de TQPF a silo'
+WHERE NOT EXISTS (SELECT 1 FROM parametros_sistema WHERE clave = 'tambores_purga_traspaso');
 
 -- Fin de la migración
 SELECT 'Migración TQPF/Silo/Mezcla aplicada correctamente (idempotente).' AS resultado;

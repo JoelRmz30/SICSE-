@@ -85,3 +85,206 @@ body {
 .silo-nfc-row {
     background-color: rgba(111, 66, 193, 0.06);
 }
+
+.app-shell-modern {
+    min-height: 100vh;
+}
+
+.app-topbar {
+    min-height: 64px;
+    padding: 0.4rem 0.85rem;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.10);
+    z-index: 1040;
+}
+
+.app-topbar .container-fluid {
+    gap: 0.75rem;
+}
+
+.app-topbar-left,
+.app-topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+}
+
+.app-topbar-left {
+    min-width: 0;
+}
+
+.app-topbar-right {
+    margin-left: auto;
+}
+
+.app-topbar-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin-right: 0.75rem;
+    font-weight: 700;
+}
+
+.app-topbar-breadcrumb {
+    color: rgba(255, 255, 255, 0.92);
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.app-company-pill,
+.app-user-pill {
+    border-radius: 10px;
+    padding: 0.45rem 0.85rem;
+}
+
+.app-user-pill {
+    color: #fff;
+    line-height: 1.1;
+    text-align: right;
+}
+
+.app-user-pill:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.10);
+}
+
+.app-topbar-search {
+    display: flex;
+    align-items: stretch;
+    min-width: 280px;
+    max-width: 380px;
+}
+
+.app-topbar-search .form-control {
+    border-radius: 0;
+    border-right: 0;
+}
+
+.app-topbar-search .btn {
+    border-radius: 0;
+    border-left: 0;
+    color: #495057;
+}
+
+.app-topbar-notification .nav-link {
+    color: #fff;
+    width: 42px;
+    height: 42px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+}
+
+.app-topbar-notification .nav-link:hover {
+    background: rgba(255, 255, 255, 0.10);
+}
+
+.app-mobile-nav {
+    background: #ffffff;
+    border-bottom: 1px solid #d5dee2;
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.06);
+}
+
+.app-mobile-nav-inner {
+    display: flex;
+    flex-direction: column;
+    padding: 0.8rem 1rem;
+}
+
+.app-mobile-link {
+    color: #17324d;
+    text-decoration: none;
+    padding: 0.75rem 0.25rem;
+    border-bottom: 1px solid #eef2f4;
+    font-weight: 500;
+}
+
+.app-mobile-link:last-child {
+    border-bottom: 0;
+}
+
+.app-page-shell {
+    padding-bottom: 2rem;
+}
+
+@media (min-width: 992px) {
+    .app-side-rail {
+        position: fixed;
+        top: 64px;
+        left: 0;
+        width: 60px;
+        height: calc(100vh - 64px);
+        background: var(--brand-green);
+        border-right: 1px solid rgba(255, 255, 255, 0.08);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.8rem;
+        padding: 1rem 0;
+        box-shadow: 4px 0 12px rgba(0, 0, 0, 0.08);
+        z-index: 1031;
+    }
+
+    .app-rail-link {
+        width: 40px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: rgba(255, 255, 255, 0.95);
+        text-decoration: none;
+        border-radius: 10px;
+        transition: background-color 0.2s ease, transform 0.2s ease;
+        font-size: 1.28rem;
+    }
+
+    .app-rail-link:hover {
+        color: #fff;
+        background: rgba(255, 255, 255, 0.12);
+        transform: translateY(-1px);
+    }
+
+    .app-side-rail .dropdown-menu {
+        margin-left: 0.45rem;
+    }
+
+    .app-main-modern {
+        padding-top: 0.9rem;
+        padding-left: 76px;
+        min-height: calc(100vh - 64px);
+    }
+
+    .app-main-modern .container,
+    .app-main-modern .container-fluid {
+        max-width: 100%;
+        margin-top: 0 !important;
+    }
+}
+
+@media (max-width: 991.98px) {
+    .app-topbar {
+        padding: 0.45rem 0.7rem;
+    }
+
+    .app-topbar-left {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    .app-topbar-brand span,
+    .app-topbar-breadcrumb,
+    .app-company-pill,
+    .app-user-pill small {
+        display: none;
+    }
+
+    .app-topbar-search {
+        display: none !important;
+    }
+
+    .app-main-modern {
+        padding-top: 0.75rem;
+    }
+}

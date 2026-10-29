@@ -112,6 +112,10 @@ def _seed():
                          descripcion='Permite captura directa a silo (sin TQPF).'),
         ParametroSistema(clave='tqpf_ocupacion_alerta_pct', valor='90',
                          descripcion='% de ocupación de TQPF para alertar.'),
+        ParametroSistema(clave='galones_tambor', valor='52',
+                         descripcion='Galones por tambor (purga de línea).'),
+        ParametroSistema(clave='tambores_purga_traspaso', valor='2',
+                         descripcion='Tambores de purga al traspasar de TQPF a silo.'),
     ])
 
     db.session.commit()

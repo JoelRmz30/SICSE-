@@ -14,62 +14,43 @@
 </head>
 <body class="{% block body_class %}{% endblock %}">
     {% if current_user.is_authenticated %}
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
-        <div class="container-fluid">
-            <a class="navbar-brand d-flex align-items-center gap-2" href="{{ url_for('index') }}">
-                <img src="{{ url_for('static', filename='img/citrofrut-logo.png') }}" alt="Citrofrut" height="28">
-                <span class="fw-semibold">SICSE</span>
-            </a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav me-auto">
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('index') }}">Dashboard</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('listar_embarques') }}">Embarques</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('empaque_resumen') }}">Material de empaque</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('inventario_tqpf') }}">Inventario TQPF</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('historial') }}">Historial</a>
-                    </li>
-                    {% if current_user.rol == 'administrador' %}
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle" href="#" id="adminDropdown" role="button" data-bs-toggle="dropdown">
-                            Administración
-                        </a>
-                        <ul class="dropdown-menu">
-                            <li><a class="dropdown-item" href="{{ url_for('gestionar_usuarios') }}">Usuarios</a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('gestionar_catalogo', nombre='productos_embarque') }}">Catálogos de embarques</a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('configurar_silos') }}">Configuración Silos</a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('configurar_tqpf') }}">Configuración TQPF</a></li>
-                            <li><hr class="dropdown-divider"></li>
-                            <li><a class="dropdown-item" href="{{ url_for('reportes') }}">Reportes</a></li>
-                        </ul>
-                    </li>
-                    {% endif %}
-                </ul>
-                <div class="navbar-nav">
-                    {% set display_name = current_user.nombre if current_user.nombre else current_user.usuario %}
-                    {% set display_role = current_user.rol if current_user.rol else ('invitado' if current_user.usuario == 'invitado' else '') %}
-                    <span class="nav-item nav-link text-light me-3">
-                        <i class="bi bi-person-circle"></i> {{ display_name }}{% if display_role %} - {{ display_role|capitalize }}{% endif %}
-                    </span>
+    {% set display_name = current_user.nombre if current_user.nombre else current_user.usuario %}
+    {% set display_role = current_user.rol if current_user.rol else ('invitado' if current_user.usuario == 'invitado' else '') %}
+    <div class="app-shell-modern">
+        <header class="navbar navbar-expand-lg navbar-dark bg-dark app-topbar">
+            <div class="container-fluid">
+                <div class="app-topbar-left">
+                    <button class="navbar-toggler app-mobile-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                        <span class="navbar-toggler-icon"></span>
+                    </button>
+                    <a class="navbar-brand app-topbar-brand" href="{{ url_for('index') }}">
+                        <img src="{{ url_for('static', filename='img/citrofrut-logo.png') }}" alt="Citrofrut" height="28">
+                        <span>SICSE</span>
+                    </a>
+                    <span class="app-topbar-breadcrumb d-none d-lg-inline">Sistema Integral de Control de Silos y Embarques</span>
+                </div>
 
-                    <!-- Campana de notificaciones -->
-                    <li class="nav-item dropdown me-2">
+                <div class="app-topbar-right">
+                    <div class="dropdown d-none d-lg-block">
+                        <a class="btn btn-outline-light btn-sm dropdown-toggle app-company-pill" href="#" role="button" data-bs-toggle="dropdown">
+                            CITROFRUT
+                        </a>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li><span class="dropdown-item-text small text-muted">Ambiente actual</span></li>
+                            <li><span class="dropdown-item-text fw-semibold">SICSE</span></li>
+                        </ul>
+                    </div>
+
+                    <form class="app-topbar-search d-none d-md-flex" role="search" onsubmit="return false;">
+                        <input type="search" class="form-control" placeholder="Buscador">
+                        <button type="button" class="btn btn-light"><i class="bi bi-search"></i></button>
+                    </form>
+
+                    <div class="nav-item dropdown app-topbar-notification">
                         <a class="nav-link position-relative" href="#" id="notifBell" role="button"
                            data-bs-toggle="dropdown" aria-expanded="false" title="Notificaciones">
                             <i class="bi bi-bell fs-5"></i>
-                            <span id="notifBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger
-                                  {% if notificaciones_no_leidas == 0 %}d-none{% endif %}"
+                            <span id="notifBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger {% if notificaciones_no_leidas == 0 %}d-none{% endif %}"
                                   style="font-size:0.65rem;">{{ notificaciones_no_leidas }}</span>
                         </a>
                         <div class="dropdown-menu dropdown-menu-end p-0 shadow" style="width:22rem; max-height:70vh; overflow-y:auto;">
@@ -91,19 +72,81 @@
                                 <a class="dropdown-item text-center small fw-semibold" href="{{ url_for('notificaciones') }}">Ver todas</a>
                             </div>
                         </div>
-                    </li>
+                    </div>
 
-                    <a class="nav-link btn btn-outline-light btn-sm" href="{{ url_for('cambiar_password') }}">
-                        <i class="bi bi-key"></i> Contraseña
-                    </a>
-                    <a class="nav-link btn btn-outline-danger btn-sm" href="{{ url_for('logout') }}">Cerrar Sesión</a>
+                    <div class="dropdown">
+                        <a class="btn btn-link text-light text-decoration-none app-user-pill" href="#" role="button" data-bs-toggle="dropdown">
+                            <span class="fw-semibold">{{ display_name }}</span>
+                            {% if display_role %}<small class="d-block">{{ display_role|capitalize }}</small>{% endif %}
+                        </a>
+                        <ul class="dropdown-menu dropdown-menu-end">
+                            <li><span class="dropdown-item-text fw-semibold">{{ display_name }}</span></li>
+                            {% if display_role %}<li><span class="dropdown-item-text small text-muted">{{ display_role|capitalize }}</span></li>{% endif %}
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item" href="{{ url_for('cambiar_password') }}"><i class="bi bi-key me-2"></i>Cambiar contraseña</a></li>
+                            <li><a class="dropdown-item text-danger" href="{{ url_for('logout') }}"><i class="bi bi-box-arrow-right me-2"></i>Cerrar sesión</a></li>
+                        </ul>
+                    </div>
                 </div>
             </div>
+        </header>
+
+        <aside class="app-side-rail d-none d-lg-flex">
+            <a class="app-rail-link" href="{{ url_for('index') }}" title="Dashboard" data-bs-toggle="tooltip" data-bs-placement="right">
+                <i class="bi bi-speedometer2"></i>
+            </a>
+            <a class="app-rail-link" href="{{ url_for('listar_embarques') }}" title="Embarques" data-bs-toggle="tooltip" data-bs-placement="right">
+                <i class="bi bi-truck"></i>
+            </a>
+            <a class="app-rail-link" href="{{ url_for('empaque_resumen') }}" title="Material de empaque" data-bs-toggle="tooltip" data-bs-placement="right">
+                <i class="bi bi-box-seam"></i>
+            </a>
+            <a class="app-rail-link" href="{{ url_for('inventario_tqpf') }}" title="Inventario TQPF" data-bs-toggle="tooltip" data-bs-placement="right">
+                <i class="bi bi-moisture"></i>
+            </a>
+            <a class="app-rail-link" href="{{ url_for('purgas_tqpf') }}" title="Purgas" data-bs-toggle="tooltip" data-bs-placement="right">
+                <i class="bi bi-funnel"></i>
+            </a>
+            <a class="app-rail-link" href="{{ url_for('historial') }}" title="Historial" data-bs-toggle="tooltip" data-bs-placement="right">
+                <i class="bi bi-clock-history"></i>
+            </a>
+            {% if current_user.rol == 'administrador' %}
+            <div class="dropdown mt-auto">
+                <a class="app-rail-link" href="#" role="button" data-bs-toggle="dropdown" title="Administración">
+                    <i class="bi bi-gear"></i>
+                </a>
+                <ul class="dropdown-menu">
+                    <li><a class="dropdown-item" href="{{ url_for('gestionar_usuarios') }}">Usuarios</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('gestionar_catalogo', nombre='productos_embarque') }}">Catálogos de embarques</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('configurar_silos') }}">Configuración Silos</a></li>
+                    <li><a class="dropdown-item" href="{{ url_for('configurar_tqpf') }}">Configuración TQPF</a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li><a class="dropdown-item" href="{{ url_for('reportes') }}">Reportes</a></li>
+                </ul>
+            </div>
+            {% endif %}
+        </aside>
+
+        <div class="collapse d-lg-none app-mobile-nav" id="navbarNav">
+            <div class="app-mobile-nav-inner">
+                <a class="app-mobile-link" href="{{ url_for('index') }}">Dashboard</a>
+                <a class="app-mobile-link" href="{{ url_for('listar_embarques') }}">Embarques</a>
+                <a class="app-mobile-link" href="{{ url_for('empaque_resumen') }}">Material de empaque</a>
+                <a class="app-mobile-link" href="{{ url_for('inventario_tqpf') }}">Inventario TQPF</a>
+                <a class="app-mobile-link" href="{{ url_for('purgas_tqpf') }}">Purgas</a>
+                <a class="app-mobile-link" href="{{ url_for('historial') }}">Historial</a>
+                {% if current_user.rol == 'administrador' %}
+                <a class="app-mobile-link" href="{{ url_for('gestionar_usuarios') }}">Usuarios</a>
+                <a class="app-mobile-link" href="{{ url_for('configurar_silos') }}">Configuración Silos</a>
+                <a class="app-mobile-link" href="{{ url_for('configurar_tqpf') }}">Configuración TQPF</a>
+                <a class="app-mobile-link" href="{{ url_for('reportes') }}">Reportes</a>
+                {% endif %}
+            </div>
         </div>
-    </nav>
+        <main class="app-main-modern">
     {% endif %}
 
-    <div class="{% block page_wrapper_class %}container mt-4{% endblock %}">
+    <div class="{% block page_wrapper_class %}container mt-4{% endblock %} app-page-shell">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
@@ -118,6 +161,10 @@
 
         {% block content %}{% endblock %}
     </div>
+    {% if current_user.is_authenticated %}
+    </main>
+    </div>
+    {% endif %}
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>

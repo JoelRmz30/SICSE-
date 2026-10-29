@@ -35,20 +35,21 @@
 
     <div class="collapse mt-3" id="collapse-art-nuevo">
         <div class="card" style="border:1px solid #D5DEE2; border-radius: 8px; padding: 1rem;">
-            <form method="post" action="{{ url_for('empaque_catalogo_guardar_articulo') }}" class="row g-3">
-                <input type="hidden" name="codigo_original">
+            <form method="post" action="{{ url_for('empaque_catalogo_guardar_articulo') }}" class="row g-3" id="form-articulo-empaque">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="codigo_original" id="art-codigo-original">
                 <div class="col-12 col-md-3">
                     <label class="form-label">Código</label>
-                    <input type="text" name="codigo" class="form-control" maxlength="20" required
+                    <input type="text" name="codigo" id="art-codigo" class="form-control" maxlength="20" required
                            placeholder="IN00120071">
                 </div>
                 <div class="col-12 col-md-5">
                     <label class="form-label">Nombre</label>
-                    <input type="text" name="nombre" class="form-control" maxlength="255" required>
+                    <input type="text" name="nombre" id="art-nombre" class="form-control" maxlength="255" required>
                 </div>
                 <div class="col-6 col-md-2">
                     <label class="form-label">Categoría</label>
-                    <select name="id_categoria" class="form-select">
+                    <select name="id_categoria" id="art-categoria" class="form-select">
                         <option value="">(sin categoría)</option>
                         {% for c in categorias if c.activo %}
                         <option value="{{ c.id_categoria }}">{{ c.nombre }}</option>
@@ -57,28 +58,29 @@
                 </div>
                 <div class="col-6 col-md-2">
                     <label class="form-label">Unidad</label>
-                    <select name="um" class="form-select" required>
+                    <select name="um" id="art-um" class="form-select" required>
                         <option value="Pz">Pz (entera)</option>
                         <option value="Kg">Kg (decimales)</option>
                     </select>
                 </div>
                 <div class="col-6 col-md-2">
                     <label class="form-label">Almacén</label>
-                    <input type="text" name="almacen" class="form-control" value="CP005" maxlength="20">
+                    <input type="text" name="almacen" id="art-almacen" class="form-control" value="CP005" maxlength="20">
                 </div>
                 <div class="col-6 col-md-2">
                     <label class="form-label">Stock mínimo</label>
-                    <input type="number" step="0.001" min="0" name="stock_minimo" class="form-control"
+                    <input type="number" step="0.001" min="0" name="stock_minimo" id="art-stock-minimo" class="form-control"
                            placeholder="Opcional">
                 </div>
                 <div class="col-6 col-md-2">
                     <label class="form-label">Físico Dynamics</label>
-                    <input type="number" step="0.001" name="fisico_dynamics" class="form-control"
+                    <input type="number" step="0.001" name="fisico_dynamics" id="art-fisico-dynamics" class="form-control"
                            placeholder="Opcional">
                 </div>
                 <div class="col-12 d-flex gap-2">
-                    <button class="btn-empaque" type="submit">Guardar</button>
+                    <button class="btn-empaque" type="submit" id="art-submit-btn">Guardar</button>
                     <button type="button" class="btn-empaque-outline"
+                            id="art-cancelar-btn"
                             data-bs-toggle="collapse" data-bs-target="#collapse-art-nuevo">Cancelar</button>
                 </div>
             </form>
@@ -130,8 +132,20 @@
                             {% else %}<span class="chip chip-{{ color }}">{{ etiq }}</span>{% endif %}
                         </td>
                         <td>
-                            <button class="btn-empaque-outline btn-sm me-1" style="padding: .2rem .5rem;">Editar</button>
+                            <button class="btn-empaque-outline btn-sm me-1 btn-editar-articulo"
+                                    type="button"
+                                    style="padding: .2rem .5rem;"
+                                    data-codigo="{{ a.codigo }}"
+                                    data-nombre="{{ a.nombre }}"
+                                    data-id-categoria="{{ a.id_categoria or '' }}"
+                                    data-um="{{ a.um }}"
+                                    data-almacen="{{ a.almacen or 'CP005' }}"
+                                    data-stock-minimo="{{ a.stock_minimo if a.stock_minimo is not none else '' }}"
+                                    data-fisico-dynamics="{{ a.fisico_dynamics if a.fisico_dynamics is not none else '' }}">
+                                Editar
+                            </button>
                             <form method="post" action="{{ url_for('empaque_catalogo_toggle_articulo') }}" class="d-inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <input type="hidden" name="codigo" value="{{ a.codigo }}">
                                 <button class="btn btn-sm btn-outline-secondary" type="submit"
                                         style="padding: .2rem .5rem;">
@@ -153,6 +167,7 @@
 <section id="sec-categorias" class="section-anchor empaque-card">
     <div class="card-title">Categorías</div>
     <form method="post" action="{{ url_for('empaque_catalogo_guardar_categoria') }}" class="row g-3 mb-3">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="col-12 col-md-6">
             <label class="form-label">Nueva categoría</label>
             <input type="text" name="nombre" class="form-control" maxlength="100" required>
@@ -192,6 +207,7 @@
 <section id="sec-areas" class="section-anchor empaque-card">
     <div class="card-title">Áreas solicitantes</div>
     <form method="post" action="{{ url_for('empaque_catalogo_guardar_area') }}" class="row g-3 mb-3">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="col-12 col-md-6">
             <label class="form-label">Nueva área</label>
             <input type="text" name="nombre" class="form-control" maxlength="100" required>
@@ -231,6 +247,7 @@
 <section id="sec-proveedores" class="section-anchor empaque-card">
     <div class="card-title">Proveedores</div>
     <form method="post" action="{{ url_for('empaque_catalogo_guardar_proveedor') }}" class="row g-3 mb-3">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="col-12 col-md-8">
             <label class="form-label">Nuevo proveedor</label>
             <input type="text" name="nombre" class="form-control" maxlength="200" required>
@@ -272,6 +289,7 @@
         Al registrar una salida a Pulpa se muestra el kit como atajo de carga rápida (TODO O NADA).
     </p>
     <form method="post" action="{{ url_for('empaque_catalogo_guardar_kit') }}" class="row g-3 mb-3">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="col-6 col-md-3">
             <label class="form-label">Área</label>
             <select name="id_area" class="form-select" required>
@@ -317,6 +335,7 @@
                         <td class="num">{{ empaque_format_num(k.cantidad_sugerida, k.articulo.um) }}</td>
                         <td>
                             <form method="post" action="{{ url_for('empaque_catalogo_eliminar_kit', id_kit=k.id_kit) }}" class="d-inline">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <button class="btn btn-sm btn-outline-danger" type="submit"
                                         style="padding: .2rem .55rem;">Quitar</button>
                             </form>
@@ -350,6 +369,7 @@
                 </a>
                 <form method="post" action="{{ url_for('empaque_carga_masiva_articulos') }}" enctype="multipart/form-data"
                       class="row g-2 align-items-end">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <div class="col-8">
                         <input type="file" name="archivo" accept=".xlsx,.xls" class="form-control form-control-sm" required>
                     </div>
@@ -369,6 +389,7 @@
                 </a>
                 <form method="post" action="{{ url_for('empaque_carga_masiva_movimientos') }}" enctype="multipart/form-data"
                       class="row g-2 align-items-end">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="tipo" value="entradas">
                     <div class="col-8">
                         <input type="file" name="archivo" accept=".xlsx,.xls" class="form-control form-control-sm" required>
@@ -389,6 +410,7 @@
                 </a>
                 <form method="post" action="{{ url_for('empaque_carga_masiva_movimientos') }}" enctype="multipart/form-data"
                       class="row g-2 align-items-end">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="tipo" value="salidas">
                     <div class="col-8">
                         <input type="file" name="archivo" accept=".xlsx,.xls" class="form-control form-control-sm" required>
@@ -427,6 +449,7 @@
         </div>
         {% if carga_articulos.correctas %}
         <form method="post" action="{{ url_for('empaque_carga_masiva_articulos_aplicar') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="empaque-table-scroll">
                 <table class="empaque-table">
                     <thead>
@@ -513,6 +536,7 @@
         </div>
         {% if clave.correctas %}
         <form method="post" action="{{ url_aplicar }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="empaque-table-scroll">
                 <table class="empaque-table">
                     <thead>
@@ -589,12 +613,15 @@
 <section id="sec-conciliacion" class="section-anchor empaque-card">
     <div class="card-title">Conciliación con Dynamics</div>
     <p class="small text-muted">
-        Sube un Excel con las columnas <code>código</code> y <code>físico_dynamics</code>
-        para actualizar únicamente el campo de físico oficial.
+        Sube un Excel con las columnas <code>código</code> y <code>físico_dynamics</code>,
+        o el formato real con <code>Nombre del producto</code>, <code>Almacén</code>,
+        <code>UM</code> e <code>Inventario Fisico Actual</code>, para actualizar
+        únicamente el campo de físico oficial.
         <strong>Nunca se modifican movimientos.</strong>
     </p>
     <form method="post" action="{{ url_for('empaque_conciliacion') }}" enctype="multipart/form-data"
           class="row g-3 align-items-end">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="col-12 col-md-8">
             <div class="row g-2">
                 <div class="col-6">
@@ -638,6 +665,7 @@
         Un ajuste puede sumar o restar stock y <em>siempre deja bitácora con usuario, fecha y motivo</em>.
     </p>
     <form method="post" action="{{ url_for('empaque_registrar_ajuste') }}" class="row g-3">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="col-12 col-md-5">
             <label class="form-label">Artículo</label>
             <select name="codigo" class="form-select" required>
@@ -746,4 +774,62 @@
     </div>
 </section>
 
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const collapseEl = document.getElementById('collapse-art-nuevo');
+    const form = document.getElementById('form-articulo-empaque');
+    if (!collapseEl || !form || typeof bootstrap === 'undefined') return;
+
+    const collapse = new bootstrap.Collapse(collapseEl, { toggle: false });
+    const btnSubmit = document.getElementById('art-submit-btn');
+    const btnCancelar = document.getElementById('art-cancelar-btn');
+    const fCodigoOriginal = document.getElementById('art-codigo-original');
+    const fCodigo = document.getElementById('art-codigo');
+    const fNombre = document.getElementById('art-nombre');
+    const fCategoria = document.getElementById('art-categoria');
+    const fUm = document.getElementById('art-um');
+    const fAlmacen = document.getElementById('art-almacen');
+    const fStockMinimo = document.getElementById('art-stock-minimo');
+    const fFisicoDynamics = document.getElementById('art-fisico-dynamics');
+
+    function limpiarFormularioArticulo() {
+        fCodigoOriginal.value = '';
+        fCodigo.value = '';
+        fNombre.value = '';
+        fCategoria.value = '';
+        fUm.value = 'Pz';
+        fAlmacen.value = 'CP005';
+        fStockMinimo.value = '';
+        fFisicoDynamics.value = '';
+        btnSubmit.textContent = 'Guardar';
+    }
+
+    document.querySelectorAll('.btn-editar-articulo').forEach(btn => {
+        btn.addEventListener('click', function () {
+            fCodigoOriginal.value = this.dataset.codigo || '';
+            fCodigo.value = this.dataset.codigo || '';
+            fNombre.value = this.dataset.nombre || '';
+            fCategoria.value = this.dataset.idCategoria || '';
+            fUm.value = this.dataset.um || 'Pz';
+            fAlmacen.value = this.dataset.almacen || 'CP005';
+            fStockMinimo.value = this.dataset.stockMinimo || '';
+            fFisicoDynamics.value = this.dataset.fisicoDynamics || '';
+            btnSubmit.textContent = 'Actualizar artículo';
+            collapse.show();
+            fCodigo.focus();
+        });
+    });
+
+    if (btnCancelar) {
+        btnCancelar.addEventListener('click', function () {
+            limpiarFormularioArticulo();
+        });
+    }
+
+    collapseEl.addEventListener('hidden.bs.collapse', limpiarFormularioArticulo);
+});
+</script>
 {% endblock %}
